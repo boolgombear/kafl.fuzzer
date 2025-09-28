@@ -80,8 +80,9 @@ class QueueNode:
                 "state_time_xml"
                 ]:
 
-            old_data[key] = old_data.get(key, 0) + new_data[key]
-            del new_data[key]
+            if key in new_data:
+                old_data[key] = old_data.get(key, 0) + new_data[key]
+                del new_data[key]
 
         old_data.update(new_data)
         return old_data

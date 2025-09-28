@@ -5,16 +5,89 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 import copy
+import json
 import re
+import os
+from pathlib import Path
 import xml.etree.ElementTree as ET
 
 from kafl_fuzzer.common.rand import rand
+from kafl_fuzzer.common.util import atomic_write
 
 # Limits to keep metadata compact and mutation workloads bounded
 _MAX_TOKEN_COUNT = 64
 _MAX_TEXT_LENGTH = 256
 _DEFAULT_TEXT_TOKENS = ["", "0", "1", "true", "false", "null", "NaN", "INF"]
 _DEFAULT_TAG_TOKENS = ["data", "item", "node", "value"]
+
+_SCHEMA_PATH = Path(__file__).with_name('xml_schema_tokens.json')
+_GLOBAL_SCHEMA = {
+    'tags': set(),
+    'attributes': set(),
+    'attribute_values': set(),
+    'texts': set(),
+}
+
+
+def _load_schema_tokens():
+    if not _SCHEMA_PATH.exists():
+        return
+    try:
+        data = json.loads(_SCHEMA_PATH.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, OSError):
+        return
+    for key in _GLOBAL_SCHEMA:
+        values = data.get(key, [])
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            if value is None:
+                continue
+            truncated = str(value)[:_MAX_TEXT_LENGTH]
+            if truncated:
+                _GLOBAL_SCHEMA[key].add(truncated)
+
+
+def _save_schema_tokens():
+    data = {key: sorted(list(values))[:_MAX_TOKEN_COUNT] for key, values in _GLOBAL_SCHEMA.items()}
+    try:
+        atomic_write(str(_SCHEMA_PATH), json.dumps(data, indent=2).encode('utf-8'))
+    except OSError:
+        pass
+
+
+_load_schema_tokens()
+
+
+def _update_schema_store(updates: Dict[str, Iterable[str]]):
+    dirty = False
+    for key, values in updates.items():
+        if key not in _GLOBAL_SCHEMA:
+            continue
+        for value in values:
+            if value is None:
+                continue
+            truncated = str(value)[:_MAX_TEXT_LENGTH]
+            if truncated and truncated not in _GLOBAL_SCHEMA[key]:
+                _GLOBAL_SCHEMA[key].add(truncated)
+                dirty = True
+    if dirty:
+        _save_schema_tokens()
+
+
+_OOXML_TAG_CANDIDATES = {
+    'w:document', 'w:body', 'w:p', 'w:r', 'w:t', 'w:tbl', 'w:tr', 'w:tc',
+    'w:hyperlink', 'w:drawing', 'wp:anchor', 'wp:inline', 'a:graphic', 'v:shape'
+}
+
+_OOXML_ATTR_VALUE_MAP = {
+    'w:val': ['single', 'double', 'underline', 'none', 'default'],
+    'w:type': ['paragraph', 'character', 'table', 'numbering'],
+    'w:styleId': ['Normal', 'Heading1', 'Heading2', 'Title'],
+    'w:color': ['000000', 'FFFFFF', 'FF0000', '00FF00', '0000FF'],
+    'w:themeColor': ['accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'hyperlink'],
+    'w:valCs': ['single', 'double', 'underline'],
+}
 
 
 @dataclass
@@ -101,7 +174,7 @@ def extract_xml_features(payload: bytes) -> Optional[XMLSeedInfo]:
 
     root = _try_parse_xml(payload)
     if root is None:
-        return None
+        return _extract_tokens_lenient(payload)
 
     tags: Set[str] = set()
     attributes: Set[str] = set()
@@ -186,6 +259,34 @@ def _scan_xml_tokens_from_text(text: str):
     return tags, attrs, attr_values, text_tokens
 
 
+def _extract_tokens_lenient(payload: bytes) -> Optional[XMLSeedInfo]:
+    if not payload:
+        return None
+    try:
+        text = payload.decode('utf-8', 'ignore')
+    except Exception:
+        text = payload.decode('latin1', 'ignore')
+
+    tags, attrs, attr_values, text_tokens = _scan_xml_tokens_from_text(text)
+    if not (tags or attrs or text_tokens):
+        return None
+
+    fragments = []
+    for fragment in re.split(r'<[^>]+>', text):
+        frag = fragment.strip()
+        if frag:
+            fragments.append(frag[:_MAX_TEXT_LENGTH])
+    text_tokens.update(fragments)
+
+    info = XMLSeedInfo(
+        tags=set(list(tags)[:_MAX_TOKEN_COUNT]),
+        attributes=set(list(attrs)[:_MAX_TOKEN_COUNT]),
+        attribute_values=set(list(attr_values)[:_MAX_TOKEN_COUNT]),
+        texts=list(text_tokens)[:_MAX_TOKEN_COUNT],
+    )
+    return info
+
+
 def _gather_external_xml_tokens():
     from kafl_fuzzer.technique import havoc_handler
 
@@ -227,6 +328,18 @@ def _build_candidate_lists(xml_info: XMLSeedInfo):
         trimmed = token[:_MAX_TEXT_LENGTH]
         if trimmed:
             text_tokens.append(trimmed)
+
+    tags.update(_GLOBAL_SCHEMA['tags'])
+    attrs.update(_GLOBAL_SCHEMA['attributes'])
+    attr_values.update(_GLOBAL_SCHEMA['attribute_values'])
+    text_tokens.extend(list(_GLOBAL_SCHEMA['texts']))
+
+    if any(tag.startswith(('w:', 'wp:', 'a:', 'v:')) for tag in tags):
+        tags.update(_OOXML_TAG_CANDIDATES)
+        for attr_key, values in _OOXML_ATTR_VALUE_MAP.items():
+            attrs.add(attr_key)
+            attr_values.update(values)
+            text_tokens.extend(values)
 
     # De-duplicate while preserving order for text tokens
     text_tokens = list(dict.fromkeys(text_tokens))
@@ -275,11 +388,70 @@ def _register_discovered_tokens(base_info: Optional[XMLSeedInfo], mutated_info: 
     base = base_info if base_info is not None else XMLSeedInfo()
     diff = mutated_info.diff(base)
     added = False
-    for bucket in (diff["texts"], diff["attribute_values"], diff["tags"], diff["attributes"]):
+    updates = {
+        'texts': diff["texts"],
+        'attribute_values': diff["attribute_values"],
+        'tags': diff["tags"],
+        'attributes': diff["attributes"]
+    }
+    for bucket in updates.values():
         for token in bucket:
             added |= _maybe_add_dict_token(token)
+    _update_schema_store(updates)
     return added
 
+
+
+def _mutate_xml_textual(payload: bytes, func, xml_info: Optional[XMLSeedInfo], max_operations: int, label_prefix: str = "xml_txt"):
+    if max_operations <= 0:
+        return
+    try:
+        text = payload.decode('utf-8')
+    except UnicodeDecodeError:
+        text = payload.decode('latin1', 'ignore')
+
+    info = xml_info if xml_info is not None else XMLSeedInfo()
+    tag_candidates, attr_candidates, attr_values, text_candidates = _build_candidate_lists(info)
+    operations = 0
+
+    def emit(mutated_text: str, label: str):
+        nonlocal operations
+        func(mutated_text.encode('utf-8', 'ignore'), label=label)
+        operations += 1
+
+    for match in _TAG_REGEX.finditer(text):
+        original = match.group(1)
+        for candidate in tag_candidates:
+            if candidate == original:
+                continue
+            mutated = text[:match.start(1)] + candidate + text[match.end(1):]
+            emit(mutated, f"{label_prefix}_tag")
+            if operations >= max_operations:
+                return
+
+    for attr_key in attr_candidates:
+        pattern = re.compile(r'(' + re.escape(attr_key) + r'\s*=\s*")([^"]*)(")')
+        match = pattern.search(text)
+        if not match:
+            continue
+        original = match.group(2)
+        for candidate in attr_values:
+            if candidate == original:
+                continue
+            mutated = text[:match.start(2)] + candidate + text[match.end(2):]
+            emit(mutated, f"{label_prefix}_attr")
+            if operations >= max_operations:
+                return
+
+    for match in re.finditer(r'>([^<]+)<', text):
+        original = match.group(1)
+        for candidate in text_candidates:
+            if candidate == original:
+                continue
+            mutated = text[:match.start(1)] + candidate + text[match.end(1):]
+            emit(mutated, f"{label_prefix}_text")
+            if operations >= max_operations:
+                return
 
 
 def _emit_xml_mutation(original_payload: bytes, mutated_root: ET.Element, xml_info: Optional[XMLSeedInfo], func, label: str) -> bool:
@@ -313,12 +485,14 @@ def mutate_seq_xml_structured(payload: bytes, func, xml_info: XMLSeedInfo, max_o
 
     root = _try_parse_xml(payload)
     if root is None:
+        _mutate_xml_textual(payload, func, xml_info, max_operations, label_prefix="xml_txt")
         return
 
     operations = 0
     elements = _iter_elements(root)
 
-    tag_candidates, attr_candidates, attr_values, text_candidates = _build_candidate_lists(xml_info)
+    info = xml_info if xml_info is not None else XMLSeedInfo()
+    tag_candidates, attr_candidates, attr_values, text_candidates = _build_candidate_lists(info)
 
     def maybe_emit(mutated_root: ET.Element, label: str) -> bool:
         nonlocal operations
@@ -387,14 +561,17 @@ def mutate_seq_xml_havoc(payload: bytes, func, xml_info: XMLSeedInfo, max_iterat
     if max_iterations <= 0:
         return
 
-    tag_candidates, attr_candidates, attr_values, text_candidates = _build_candidate_lists(xml_info)
+    info = xml_info if xml_info is not None else XMLSeedInfo()
+    tag_candidates, attr_candidates, attr_values, text_candidates = _build_candidate_lists(info)
 
     for _ in range(max_iterations):
         root = _try_parse_xml(payload)
         if root is None:
+            _mutate_xml_textual(payload, func, xml_info, 1, label_prefix="xml_havoc_txt")
             return
         elements = _iter_elements(root)
         if not elements:
+            _mutate_xml_textual(payload, func, xml_info, 1, label_prefix="xml_havoc_txt")
             return
 
         choice = rand.int(5)

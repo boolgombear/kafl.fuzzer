@@ -28,6 +28,7 @@ class FuzzingStateLogic:
     HAVOC_MULTIPLIER = 4
     RADAMSA_DIV = 10
     COLORIZATION_COUNT = 1
+    XML_STRUCT_PASSES = 2
     COLORIZATION_STEPS = 1500
     COLORIZATION_TIMEOUT = 5
 
@@ -189,30 +190,26 @@ class FuzzingStateLogic:
             self.worker.trace_payload(payload, metadata)
 
         self.stage_update_label("calibrate")
-        # Update input performance using multiple randomized executions
-        # Scheduler will de-prioritize execution of very slow nodes..
         num_execs = 10
         timer_start = time.time()
         havoc.mutate_seq_havoc_array(payload, self.execute, num_execs)
         timer_end = time.time()
         self.performance = (timer_end - timer_start) / num_execs
 
-        if metadata["info"]["exit_reason"] != "regular":  #  or metadata["info"]["stable"]:
+        if metadata["info"]["exit_reason"] != "regular":
             self.logger.debug("Validate: Skip trimming..")
             xml_info = xml_mutations.extract_xml_features(payload)
             self.xml_info = xml_info
             self.initial_time += time.time() - time_initial_start
-            xml_metadata = xml_info.to_metadata() if xml_info else None
-            return None, xml_metadata
+            return None, (xml_info.to_metadata() if xml_info else None)
 
-        if metadata["info"]["starved"]:
+        if metadata.get("info", {}).get("starved"):
             extended_payload = trim.perform_extend(payload, metadata, self.execute, self.worker.payload_limit)
-            xml_source = extended_payload if extended_payload is not None else payload
-            xml_info = xml_mutations.extract_xml_features(xml_source)
+            target_payload = extended_payload if extended_payload is not None else payload
+            xml_info = xml_mutations.extract_xml_features(target_payload)
             self.xml_info = xml_info
             self.initial_time += time.time() - time_initial_start
-            xml_metadata = xml_info.to_metadata() if xml_info else None
-            return extended_payload, xml_metadata
+            return extended_payload, (xml_info.to_metadata() if xml_info else None)
 
         new_payload = trim.perform_trim(payload, metadata, self.execute)
 
@@ -220,18 +217,16 @@ class FuzzingStateLogic:
         if center_trim and new_payload is not None:
             new_payload = trim.perform_center_trim(new_payload, metadata, self.execute)
 
-        self.initial_time += time.time() - time_initial_start
-
-        xml_source = new_payload if new_payload is not None else payload
-        xml_info = xml_mutations.extract_xml_features(xml_source)
+        target_payload = new_payload if new_payload is not None else payload
+        xml_info = xml_mutations.extract_xml_features(target_payload)
         self.xml_info = xml_info
-        xml_metadata = xml_info.to_metadata() if xml_info else None
+        self.initial_time += time.time() - time_initial_start
+        metadata_xml = xml_info.to_metadata() if xml_info else None
 
         if new_payload is None or new_payload == payload:
-            return None, xml_metadata
-        #self.logger.debug("before trim:\t\t{}".format(repr(payload)), self)
-        #self.logger.debug("after trim:\t\t{}".format(repr(new_payload)), self)
-        return new_payload, xml_metadata
+            return None, metadata_xml
+        return new_payload, metadata_xml
+
     def handle_grimoire_inference(self, payload, metadata):
         grimoire_info: Dict[Any, Any] = {}
 
@@ -291,10 +286,6 @@ class FuzzingStateLogic:
         havoc_xml = self.xml_info is not None
 
         for i in range(1):
-            # Dict based on RQ learned tokens
-            # TODO: AFL only has deterministic dict stage for manual dictionary.
-            # However RQ dict and auto-dict actually grow over time. Perhaps
-            # create multiple dicts over time and store progress in metadata?
             if havoc_redqueen:
                 self.__perform_rq_dict(payload, metadata)
 
@@ -311,7 +302,7 @@ class FuzzingStateLogic:
             if havoc_xml:
                 xml_start_time = time.time()
                 perf = metadata.get("performance") or 1
-                iterations = max(1, havoc.havoc_range(self.HAVOC_MULTIPLIER / perf) // 4)
+                iterations = max(4, havoc.havoc_range(self.HAVOC_MULTIPLIER / perf) // 2)
                 xml_mutations.mutate_seq_xml_havoc(payload, self.execute, self.xml_info, iterations)
                 self.xml_time += time.time() - xml_start_time
 
@@ -437,7 +428,7 @@ class FuzzingStateLogic:
         # Mutable payload allows faster bitwise manipulations
         payload_array = bytearray(payload)
         
-        default_info = {"stage": "xml"}
+        default_info = {"stage": "xml", "xml_pass": 0}
         det_info = metadata.get("afl_det_info", default_info)
 
         if det_info["stage"] == "xml":
@@ -446,6 +437,7 @@ class FuzzingStateLogic:
                 xml_start = time.time()
                 xml_mutations.mutate_seq_xml_structured(bytes(payload_array), self.execute, self.xml_info)
                 self.xml_time += time.time() - xml_start
+            det_info["xml_pass"] = det_info.get("xml_pass", 0) + 1
             det_info["stage"] = "flip_1"
             if self.stage_timeout_reached():
                 return True, det_info
@@ -502,6 +494,10 @@ class FuzzingStateLogic:
             interesting_values.mutate_seq_32_bit_interesting(payload_array, self.execute, skip_null=skip_zero, effector_map=effector_map, arith_max=arith_max)
 
             det_info["stage"] = "done"
+
+        if self.xml_info and det_info.get("xml_pass", 0) < self.XML_STRUCT_PASSES:
+            det_info["stage"] = "xml"
+            return True, det_info
 
         return False, det_info
 
