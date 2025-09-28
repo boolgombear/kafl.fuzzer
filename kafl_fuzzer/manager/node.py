@@ -76,7 +76,8 @@ class QueueNode:
                 "state_time_grimoire_inference",
                 "state_time_havoc",
                 "state_time_splice",
-                "state_time_radamsa"
+                "state_time_radamsa",
+                "state_time_xml"
                 ]:
 
             old_data[key] = old_data.get(key, 0) + new_data[key]

@@ -1,4 +1,4 @@
-# Copyright 2017-2019 Sergej Schumilo, Cornelius Aschermann, Tim Blazytko
+﻿# Copyright 2017-2019 Sergej Schumilo, Cornelius Aschermann, Tim Blazytko
 # Copyright 2019-2020 Intel Corporation
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
@@ -16,6 +16,7 @@ from kafl_fuzzer.technique.redqueen.colorize import ColorizerStrategy
 from kafl_fuzzer.technique.redqueen.mod import RedqueenInfoGatherer
 from kafl_fuzzer.technique.redqueen.workdir import RedqueenWorkdir
 from kafl_fuzzer.technique import trim, bitflip, arithmetic, interesting_values, havoc, radamsa
+from kafl_fuzzer.technique import xml_mutations
 from kafl_fuzzer.technique import grimoire_mutations as grimoire
 #from kafl_fuzzer.technique.trim import perform_trim, perform_center_trim, perform_extend
 #import kafl_fuzzer.technique.bitflip as bitflip
@@ -44,6 +45,7 @@ class FuzzingStateLogic:
         self.stage_info_findings = 0
         self.attention_secs_start: float = 0
         self.attention_execs_start: float = 0
+        self.xml_info = None
 
     def __str__(self):
         return str(self.worker)
@@ -77,6 +79,7 @@ class FuzzingStateLogic:
         ret["state_time_grimoire"] = self.grimoire_time
         ret["state_time_grimoire_inference"] = self.grimoire_inference_time
         ret["state_time_redqueen"] = self.redqueen_time
+        ret["state_time_xml"] = getattr(self, "xml_time", 0)
         ret["performance"] = self.performance
 
         if additional_data:
@@ -97,8 +100,8 @@ class FuzzingStateLogic:
         self.init_stage_info(metadata)
 
         if metadata["state"]["name"] == "initial":
-            new_payload = self.handle_initial(payload, metadata)
-            return self.create_update({"name": "redq/grim"}, None), new_payload
+            new_payload, xml_metadata = self.handle_initial(payload, metadata)
+            return self.create_update({"name": "redq/grim"}, {"xml_info": xml_metadata}), new_payload
         elif metadata["state"]["name"] == "redq/grim":
             grimoire_info = self.handle_grimoire_inference(payload, metadata)
             self.handle_redqueen(payload, metadata)
@@ -138,7 +141,8 @@ class FuzzingStateLogic:
         self.grimoire_time: float = 0
         self.grimoire_inference_time: float = 0
         self.redqueen_time: float = 0
-
+        self.xml_time: float = 0
+        self.xml_info = xml_mutations.XMLSeedInfo.from_metadata(metadata.get("xml_info"))
         self.worker.statistics.event_stage(stage, nid)
 
     def stage_update_label(self, method):
@@ -191,29 +195,43 @@ class FuzzingStateLogic:
         timer_start = time.time()
         havoc.mutate_seq_havoc_array(payload, self.execute, num_execs)
         timer_end = time.time()
-        self.performance = (timer_end-timer_start) / num_execs
+        self.performance = (timer_end - timer_start) / num_execs
 
-        # Trimming only for stable + non-crashing inputs
-        if metadata["info"]["exit_reason"] != "regular": #  or metadata["info"]["stable"]:
+        if metadata["info"]["exit_reason"] != "regular":  #  or metadata["info"]["stable"]:
             self.logger.debug("Validate: Skip trimming..")
-            return None
+            xml_info = xml_mutations.extract_xml_features(payload)
+            self.xml_info = xml_info
+            self.initial_time += time.time() - time_initial_start
+            xml_metadata = xml_info.to_metadata() if xml_info else None
+            return None, xml_metadata
 
-        if metadata['info']['starved']:
-            return trim.perform_extend(payload, metadata, self.execute, self.worker.payload_limit)
+        if metadata["info"]["starved"]:
+            extended_payload = trim.perform_extend(payload, metadata, self.execute, self.worker.payload_limit)
+            xml_source = extended_payload if extended_payload is not None else payload
+            xml_info = xml_mutations.extract_xml_features(xml_source)
+            self.xml_info = xml_info
+            self.initial_time += time.time() - time_initial_start
+            xml_metadata = xml_info.to_metadata() if xml_info else None
+            return extended_payload, xml_metadata
 
         new_payload = trim.perform_trim(payload, metadata, self.execute)
 
         center_trim = True
-        if center_trim:
+        if center_trim and new_payload is not None:
             new_payload = trim.perform_center_trim(new_payload, metadata, self.execute)
 
         self.initial_time += time.time() - time_initial_start
-        if new_payload == payload:
-            return None
+
+        xml_source = new_payload if new_payload is not None else payload
+        xml_info = xml_mutations.extract_xml_features(xml_source)
+        self.xml_info = xml_info
+        xml_metadata = xml_info.to_metadata() if xml_info else None
+
+        if new_payload is None or new_payload == payload:
+            return None, xml_metadata
         #self.logger.debug("before trim:\t\t{}".format(repr(payload)), self)
         #self.logger.debug("after trim:\t\t{}".format(repr(new_payload)), self)
-        return new_payload
-
+        return new_payload, xml_metadata
     def handle_grimoire_inference(self, payload, metadata):
         grimoire_info: Dict[Any, Any] = {}
 
@@ -270,6 +288,7 @@ class FuzzingStateLogic:
         havoc_radamsa = self.config.radamsa
         havoc_grimoire = self.config.grimoire
         havoc_redqueen = self.config.redqueen
+        havoc_xml = self.xml_info is not None
 
         for i in range(1):
             # Dict based on RQ learned tokens
@@ -289,6 +308,13 @@ class FuzzingStateLogic:
                 self.__perform_radamsa(payload, metadata)
                 self.radamsa_time += time.time() - radamsa_start_time
 
+            if havoc_xml:
+                xml_start_time = time.time()
+                perf = metadata.get("performance") or 1
+                iterations = max(1, havoc.havoc_range(self.HAVOC_MULTIPLIER / perf) // 4)
+                xml_mutations.mutate_seq_xml_havoc(payload, self.execute, self.xml_info, iterations)
+                self.xml_time += time.time() - xml_start_time
+
             if havoc_afl:
                 havoc_start_time = time.time()
                 self.__perform_havoc(payload, metadata, use_splicing=False)
@@ -299,7 +325,7 @@ class FuzzingStateLogic:
                 self.__perform_havoc(payload, metadata, use_splicing=True)
                 self.splice_time += time.time() - splice_start_time
 
-        self.logger.debug("HAVOC times: afl: %.1f, splice: %.1f, grim: %.1f, rdmsa: %.1f", self.havoc_time, self.splice_time, self.grimoire_time, self.radamsa_time)
+        self.logger.debug("HAVOC times: afl: %.1f, splice: %.1f, grim: %.1f, rdmsa: %.1f, xml: %.1f", self.havoc_time, self.splice_time, self.grimoire_time, self.radamsa_time, self.xml_time)
 
 
     def validate_bytes(self, payload, metadata, extra_info=None):
@@ -411,8 +437,18 @@ class FuzzingStateLogic:
         # Mutable payload allows faster bitwise manipulations
         payload_array = bytearray(payload)
         
-        default_info = {"stage": "flip_1"}
+        default_info = {"stage": "xml"}
         det_info = metadata.get("afl_det_info", default_info)
+
+        if det_info["stage"] == "xml":
+            if self.xml_info:
+                self.stage_update_label("xml_struct")
+                xml_start = time.time()
+                xml_mutations.mutate_seq_xml_structured(bytes(payload_array), self.execute, self.xml_info)
+                self.xml_time += time.time() - xml_start
+            det_info["stage"] = "flip_1"
+            if self.stage_timeout_reached():
+                return True, det_info
 
         # Walking bitflips
         if det_info["stage"] == "flip_1":
@@ -558,3 +594,4 @@ class FuzzingStateLogic:
 
         colored_arrays.append(payload_array)
         return colored_arrays
+
