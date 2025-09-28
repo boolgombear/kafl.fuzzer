@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """XML-specific seed analysis and mutation helpers for kAFL."""
 
@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 import copy
 import json
+import logging
 import re
 import os
 from pathlib import Path
@@ -13,6 +14,8 @@ import xml.etree.ElementTree as ET
 
 from kafl_fuzzer.common.rand import rand
 from kafl_fuzzer.common.util import atomic_write
+
+_LOGGER = logging.getLogger(__name__)
 
 # Limits to keep metadata compact and mutation workloads bounded
 _MAX_TOKEN_COUNT = 64
@@ -33,7 +36,7 @@ def _load_schema_tokens():
     if not _SCHEMA_PATH.exists():
         return
     try:
-        data = json.loads(_SCHEMA_PATH.read_text(encoding='utf-8'))
+        data = json.loads(_SCHEMA_PATH.read_text(encoding='utf-8-sig'))
     except (json.JSONDecodeError, OSError):
         return
     for key in _GLOBAL_SCHEMA:
@@ -51,9 +54,10 @@ def _load_schema_tokens():
 def _save_schema_tokens():
     data = {key: sorted(list(values))[:_MAX_TOKEN_COUNT] for key, values in _GLOBAL_SCHEMA.items()}
     try:
-        atomic_write(str(_SCHEMA_PATH), json.dumps(data, indent=2).encode('utf-8'))
-    except OSError:
-        pass
+        _SCHEMA_PATH.write_text(json.dumps(data, indent=2), encoding='utf-8')
+        _LOGGER.info('Persisted XML schema tokens -> %s', ', '.join(f"{k}:{len(v)}" for k, v in data.items()))
+    except OSError as exc:
+        _LOGGER.warning('Failed to persist XML schema tokens: %s', exc)
 
 
 _load_schema_tokens()
@@ -61,6 +65,7 @@ _load_schema_tokens()
 
 def _update_schema_store(updates: Dict[str, Iterable[str]]):
     dirty = False
+    added_tokens = {key: [] for key in _GLOBAL_SCHEMA}
     for key, values in updates.items():
         if key not in _GLOBAL_SCHEMA:
             continue
@@ -70,8 +75,16 @@ def _update_schema_store(updates: Dict[str, Iterable[str]]):
             truncated = str(value)[:_MAX_TEXT_LENGTH]
             if truncated and truncated not in _GLOBAL_SCHEMA[key]:
                 _GLOBAL_SCHEMA[key].add(truncated)
+                added_tokens[key].append(truncated)
                 dirty = True
     if dirty:
+        summary = []
+        for key, vals in added_tokens.items():
+            if vals:
+                sample = ', '.join(sorted(vals)[:5])
+                summary.append(f"{key}: {sample}")
+        if summary:
+            _LOGGER.info("Updated XML schema tokens -> %s", '; '.join(summary))
         _save_schema_tokens()
 
 
@@ -211,6 +224,12 @@ def extract_xml_features(payload: bytes) -> Optional[XMLSeedInfo]:
         attribute_values=set(list(attribute_values)[:_MAX_TOKEN_COUNT]),
         texts=limited_texts,
     )
+    _update_schema_store({
+        'tags': info.tags,
+        'attributes': info.attributes,
+        'attribute_values': info.attribute_values,
+        'texts': info.texts
+    })
     return info
 
 
@@ -284,6 +303,12 @@ def _extract_tokens_lenient(payload: bytes) -> Optional[XMLSeedInfo]:
         attribute_values=set(list(attr_values)[:_MAX_TOKEN_COUNT]),
         texts=list(text_tokens)[:_MAX_TOKEN_COUNT],
     )
+    _update_schema_store({
+        'tags': info.tags,
+        'attributes': info.attributes,
+        'attribute_values': info.attribute_values,
+        'texts': info.texts
+    })
     return info
 
 
@@ -389,15 +414,23 @@ def _register_discovered_tokens(base_info: Optional[XMLSeedInfo], mutated_info: 
     diff = mutated_info.diff(base)
     added = False
     updates = {
-        'texts': diff["texts"],
-        'attribute_values': diff["attribute_values"],
         'tags': diff["tags"],
-        'attributes': diff["attributes"]
+        'attributes': diff["attributes"],
+        'attribute_values': diff["attribute_values"],
+        'texts': diff["texts"]
     }
     for bucket in updates.values():
         for token in bucket:
             added |= _maybe_add_dict_token(token)
     _update_schema_store(updates)
+    if added:
+        summaries = []
+        for key, values in updates.items():
+            if values:
+                sample = ', '.join(sorted(list(values))[:5])
+                summaries.append(f"{key}: {sample}")
+        if summaries:
+            _LOGGER.info("Discovered XML tokens -> %s", '; '.join(summaries))
     return added
 
 

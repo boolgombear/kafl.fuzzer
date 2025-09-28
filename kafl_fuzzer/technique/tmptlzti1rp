@@ -1,7 +1,6 @@
 {
   "tags": [
     "a:graphic",
-    "ns0:item",
     "root",
     "v:shape",
     "w:body",
@@ -25,8 +24,7 @@
     "w:themeColor",
     "w:type",
     "w:val",
-    "w:valCs",
-    "xmlns:ns0"
+    "w:valCs"
   ],
   "attribute_values": [
     "000000",
@@ -53,16 +51,13 @@
     "paragraph",
     "single",
     "table",
-    "underline",
-    "urn:demo"
+    "underline"
   ],
   "texts": [
     "Example",
     "Hello",
     "Lorem ipsum",
     "Placeholder",
-    "Sample",
-    "alpha",
-    "urn:demo"
+    "Sample"
   ]
 }

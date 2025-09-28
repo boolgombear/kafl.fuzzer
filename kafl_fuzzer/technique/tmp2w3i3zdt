@@ -1,0 +1,15 @@
+{
+  "tags": [
+    "root",
+    "{urn:demo}item"
+  ],
+  "attributes": [
+    "type"
+  ],
+  "attribute_values": [
+    "alpha"
+  ],
+  "texts": [
+    "Hello"
+  ]
+}
