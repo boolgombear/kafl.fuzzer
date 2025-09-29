@@ -9,6 +9,7 @@ import json
 import logging
 import re
 import os
+import sys
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -17,8 +18,8 @@ from kafl_fuzzer.common.util import atomic_write
 
 _LOGGER = logging.getLogger(__name__)
 
-# Limits to keep metadata compact and mutation workloads bounded
-_MAX_TOKEN_COUNT = 64
+# Token collection is unbounded; text length remains capped per entry
+_MAX_TOKEN_COUNT = sys.maxsize
 _MAX_TEXT_LENGTH = 256
 _DEFAULT_TEXT_TOKENS = ["", "0", "1", "true", "false", "null", "NaN", "INF"]
 _DEFAULT_TAG_TOKENS = ["data", "item", "node", "value"]
@@ -464,18 +465,18 @@ def _mutate_xml_textual(payload: bytes, func, xml_info: Optional[XMLSeedInfo], m
 
     for attr_key in attr_candidates:
         pattern = re.compile(r'(' + re.escape(attr_key) + r'\s*=\s*")([^"]*)(")')
-        match = pattern.search(text)
-        if not match:
+        matches = list(pattern.finditer(text))
+        if not matches:
             continue
-        original = match.group(2)
-        for candidate in attr_values:
-            if candidate == original:
-                continue
-            mutated = text[:match.start(2)] + candidate + text[match.end(2):]
-            emit(mutated, f"{label_prefix}_attr")
-            if operations >= max_operations:
-                return
-
+        for match in matches:
+            original = match.group(2)
+            for candidate in attr_values:
+                if candidate == original:
+                    continue
+                mutated = text[:match.start(2)] + candidate + text[match.end(2):]
+                emit(mutated, f"{label_prefix}_attr")
+                if operations >= max_operations:
+                    return
     for match in re.finditer(r'>([^<]+)<', text):
         original = match.group(1)
         for candidate in text_candidates:

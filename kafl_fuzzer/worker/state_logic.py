@@ -28,7 +28,7 @@ class FuzzingStateLogic:
     HAVOC_MULTIPLIER = 4
     RADAMSA_DIV = 10
     COLORIZATION_COUNT = 1
-    XML_STRUCT_PASSES = 2
+    XML_STRUCT_PASSES = 4
     COLORIZATION_STEPS = 1500
     COLORIZATION_TIMEOUT = 5
 
@@ -99,6 +99,14 @@ class FuzzingStateLogic:
 
     def process_node(self, payload: bytes, metadata):
         self.init_stage_info(metadata)
+
+        if payload is not None:
+            parsed_info = xml_mutations.extract_xml_features(payload)
+            if parsed_info is not None:
+                if self.xml_info is None:
+                    self.xml_info = parsed_info
+                else:
+                    self.xml_info.merge(parsed_info)
 
         if metadata["state"]["name"] == "initial":
             new_payload, xml_metadata = self.handle_initial(payload, metadata)
