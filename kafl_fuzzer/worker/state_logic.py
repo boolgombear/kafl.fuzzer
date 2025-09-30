@@ -1,4 +1,4 @@
-﻿# Copyright 2017-2019 Sergej Schumilo, Cornelius Aschermann, Tim Blazytko
+# Copyright 2017-2019 Sergej Schumilo, Cornelius Aschermann, Tim Blazytko
 # Copyright 2019-2020 Intel Corporation
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
@@ -17,6 +17,7 @@ from kafl_fuzzer.technique.redqueen.mod import RedqueenInfoGatherer
 from kafl_fuzzer.technique.redqueen.workdir import RedqueenWorkdir
 from kafl_fuzzer.technique import trim, bitflip, arithmetic, interesting_values, havoc, radamsa
 from kafl_fuzzer.technique import xml_mutations
+from kafl_fuzzer.technique import nautilus_mutations
 from kafl_fuzzer.technique import grimoire_mutations as grimoire
 #from kafl_fuzzer.technique.trim import perform_trim, perform_center_trim, perform_extend
 #import kafl_fuzzer.technique.bitflip as bitflip
@@ -29,6 +30,7 @@ class FuzzingStateLogic:
     RADAMSA_DIV = 10
     COLORIZATION_COUNT = 1
     XML_STRUCT_PASSES = 4
+    NAUTILUS_STRUCT_PASSES = 2
     COLORIZATION_STEPS = 1500
     COLORIZATION_TIMEOUT = 5
 
@@ -39,6 +41,24 @@ class FuzzingStateLogic:
         self.grimoire = GrimoireInference(config, self.validate_bytes)
         havoc.init_havoc(config)
         radamsa.init_radamsa(config, self.worker.pid)
+
+        self.nautilus_mutator = None
+        self.nautilus_iterations = max(0, getattr(config, 'nautilus_iterations', 64) or 0)
+        self.nautilus_enabled = bool(getattr(config, 'nautilus', False))
+        if self.nautilus_enabled:
+            try:
+                self.nautilus_mutator = nautilus_mutations.NautilusGrammarMutator(
+                    grammar_path=getattr(config, 'nautilus_grammar', None),
+                    max_depth=getattr(config, 'nautilus_depth', 6),
+                    logger=self.logger,
+                )
+                self.logger.info("Enabled Nautilus grammar mutations using %s", self.nautilus_mutator.grammar_path)
+            except Exception as exc:
+                self.logger.warning("Failed to initialize Nautilus mutator: %s", exc)
+                self.nautilus_mutator = None
+                self.nautilus_enabled = False
+        if not self.nautilus_mutator:
+            self.nautilus_iterations = 0
 
         self.stage_info = {}
         self.stage_info_start_time: float = 0
@@ -81,6 +101,7 @@ class FuzzingStateLogic:
         ret["state_time_grimoire_inference"] = self.grimoire_inference_time
         ret["state_time_redqueen"] = self.redqueen_time
         ret["state_time_xml"] = getattr(self, "xml_time", 0)
+        ret["state_time_nautilus"] = getattr(self, "nautilus_time", 0)
         ret["performance"] = self.performance
 
         if additional_data:
@@ -150,6 +171,7 @@ class FuzzingStateLogic:
         self.grimoire_time: float = 0
         self.grimoire_inference_time: float = 0
         self.redqueen_time: float = 0
+        self.nautilus_time: float = 0
         self.xml_time: float = 0
         self.xml_info = xml_mutations.XMLSeedInfo.from_metadata(metadata.get("xml_info"))
         self.worker.statistics.event_stage(stage, nid)
@@ -292,6 +314,7 @@ class FuzzingStateLogic:
         havoc_grimoire = self.config.grimoire
         havoc_redqueen = self.config.redqueen
         havoc_xml = self.xml_info is not None
+        havoc_nautilus = self.nautilus_mutator is not None
 
         for i in range(1):
             if havoc_redqueen:
@@ -314,6 +337,19 @@ class FuzzingStateLogic:
                 xml_mutations.mutate_seq_xml_havoc(payload, self.execute, self.xml_info, iterations)
                 self.xml_time += time.time() - xml_start_time
 
+            if havoc_nautilus:
+                nautilus_start_time = time.time()
+                perf = metadata.get("performance") or 1
+                iterations = max(4, havoc.havoc_range(self.HAVOC_MULTIPLIER / perf) // 2)
+                nautilus_mutations.mutate_seq_nautilus(
+                    payload,
+                    self.execute,
+                    self.nautilus_mutator,
+                    iterations,
+                    label_prefix="nautilus_havoc",
+                )
+                self.nautilus_time += time.time() - nautilus_start_time
+
             if havoc_afl:
                 havoc_start_time = time.time()
                 self.__perform_havoc(payload, metadata, use_splicing=False)
@@ -324,7 +360,7 @@ class FuzzingStateLogic:
                 self.__perform_havoc(payload, metadata, use_splicing=True)
                 self.splice_time += time.time() - splice_start_time
 
-        self.logger.debug("HAVOC times: afl: %.1f, splice: %.1f, grim: %.1f, rdmsa: %.1f, xml: %.1f", self.havoc_time, self.splice_time, self.grimoire_time, self.radamsa_time, self.xml_time)
+        self.logger.debug("HAVOC times: afl: %.1f, splice: %.1f, grim: %.1f, rdmsa: %.1f, xml: %.1f, naut: %.1f", self.havoc_time, self.splice_time, self.grimoire_time, self.radamsa_time, self.xml_time, self.nautilus_time)
 
 
     def validate_bytes(self, payload, metadata, extra_info=None):
@@ -435,9 +471,31 @@ class FuzzingStateLogic:
 
         # Mutable payload allows faster bitwise manipulations
         payload_array = bytearray(payload)
-        
-        default_info = {"stage": "xml", "xml_pass": 0}
+
+        default_stage = "nautilus" if self.nautilus_mutator else "xml"
+        default_info = {"stage": default_stage, "xml_pass": 0}
+        if self.nautilus_mutator:
+            default_info["nautilus_pass"] = 0
         det_info = metadata.get("afl_det_info", default_info)
+        if self.nautilus_mutator:
+            det_info.setdefault("nautilus_pass", 0)
+
+        if self.nautilus_mutator and det_info["stage"] == "nautilus":
+            self.stage_update_label("nautilus_struct")
+            naut_start = time.time()
+            if self.nautilus_iterations > 0:
+                nautilus_mutations.mutate_seq_nautilus(
+                    bytes(payload_array),
+                    self.execute,
+                    self.nautilus_mutator,
+                    self.nautilus_iterations,
+                    label_prefix="nautilus_struct",
+                )
+            self.nautilus_time += time.time() - naut_start
+            det_info["nautilus_pass"] = det_info.get("nautilus_pass", 0) + 1
+            det_info["stage"] = "xml" if self.xml_info else "flip_1"
+            if self.stage_timeout_reached():
+                return True, det_info
 
         if det_info["stage"] == "xml":
             if self.xml_info:
@@ -502,6 +560,10 @@ class FuzzingStateLogic:
             interesting_values.mutate_seq_32_bit_interesting(payload_array, self.execute, skip_null=skip_zero, effector_map=effector_map, arith_max=arith_max)
 
             det_info["stage"] = "done"
+
+        if self.nautilus_mutator and det_info.get("nautilus_pass", 0) < self.NAUTILUS_STRUCT_PASSES:
+            det_info["stage"] = "nautilus"
+            return True, det_info
 
         if self.xml_info and det_info.get("xml_pass", 0) < self.XML_STRUCT_PASSES:
             det_info["stage"] = "xml"
