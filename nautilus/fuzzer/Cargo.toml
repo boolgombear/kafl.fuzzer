@@ -1,0 +1,32 @@
+[package]
+name = "fuzzer"
+version = "0.1.0"
+authors = ["coco <coco@hexgolems.com>"]
+default-run = "fuzzer"
+
+[dependencies]
+nix = "0.17.0"
+time = "0.1"
+subprocess = "0.2.4"
+grammartec = {path = "../grammartec"}
+forksrv =  {path = "../forksrv"}
+libc = "*"
+serde = "1.0"
+serde_json = "1.0"
+serde_derive = "1.0"
+argparse = "0.2.2"
+ron = "*"
+clap = "2.33.1"
+pyo3 = "0.21.2"
+
+[[bin]]
+name = "fuzzer"
+path = "src/main.rs"
+
+[[bin]]
+name = "generator"
+path = "src/generator.rs"
+
+[[bin]]
+name = "mutator"
+path = "src/mutation_tester.rs"
