@@ -17,12 +17,13 @@ import sys
 import shutil
 import tempfile
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 import lz4.frame as lz4
 
 #from kafl_fuzzer.common.config import FuzzerConfiguration
 from kafl_fuzzer.common.rand import rand
 from kafl_fuzzer.common.util import atomic_write
+from kafl_fuzzer.common.ooxml import OOXMLAdapter, ZipEntry
 from kafl_fuzzer.manager.bitmap import BitmapStorage, GlobalBitmap
 from kafl_fuzzer.manager.communicator import ClientConnection, MSG_IMPORT, MSG_RUN_NODE, MSG_BUSY
 from kafl_fuzzer.manager.node import QueueNode
@@ -56,9 +57,47 @@ class WorkerTask:
         self.t_check = config.timeout_check
         self.num_funky = 0
 
+        self.ooxml_adapter: Optional[OOXMLAdapter] = None
+        self._ooxml_context: Optional[Dict[str, ZipEntry]] = None
+        template_path = getattr(self.config, 'ooxml_template', None)
+        if template_path:
+            entry_paths = getattr(self.config, 'ooxml_entries', None)
+            if isinstance(entry_paths, str):
+                entry_paths = [entry_paths]
+            self.ooxml_adapter = OOXMLAdapter(
+                template_path,
+                entry_paths,
+                max_payload=self.payload_limit,
+            )
+
+    def _reset_ooxml_context(self) -> None:
+        self._ooxml_context = None
+
+    def _prepare_payload_for_mutation(self, payload: bytes) -> bytes:
+        if not self.ooxml_adapter:
+            return payload
+        if payload is not None and self.ooxml_adapter.is_archive(payload):
+            context = self.ooxml_adapter.context_from_bytes(payload)
+            self._ooxml_context = context
+            return self.ooxml_adapter.extract_entry_from_context(context)
+        self._ooxml_context = self.ooxml_adapter.template_context_copy()
+        return payload
+
+    def _package_payload_for_execution(self, entry: bytes) -> bytes:
+        if not self.ooxml_adapter:
+            return entry
+        if self._ooxml_context is None:
+            self._ooxml_context = self.ooxml_adapter.template_context_copy()
+        packaged = self.ooxml_adapter.build_archive(entry, self._ooxml_context)
+        if len(packaged) > self.payload_limit:
+            raise QemuIOException(
+                f"OOXML payload size {len(packaged)} exceeds payload limit {self.payload_limit}"
+            )
+        return packaged
+
     def handle_import(self, msg):
         meta_data = {"state": {"name": "import"}, "id": 0}
-        payload = msg["task"]["payload"]
+        payload = self._prepare_payload_for_mutation(msg["task"]["payload"])
         self.q.set_timeout(self.t_hard)
         try:
             self.logic.process_import(payload, meta_data)
@@ -66,6 +105,8 @@ class WorkerTask:
             self.logger.warn("Execution failure on import.")
             self.conn.send_node_abort(None, None)
             raise
+        finally:
+            self._reset_ooxml_context()
         self.conn.send_ready()
 
     def handle_busy(self):
@@ -83,7 +124,8 @@ class WorkerTask:
 
     def handle_node(self, msg):
         meta_data: Dict[str, Any] = QueueNode.get_metadata(self.config.workdir, msg["task"]["nid"])
-        payload: bytes = QueueNode.get_payload(self.config.workdir, meta_data)
+        raw_payload: bytes = QueueNode.get_payload(self.config.workdir, meta_data)
+        payload = self._prepare_payload_for_mutation(raw_payload)
 
         # fixme: determine globally based on all seen regulars
         t_dyn = self.t_soft + 1.2 * meta_data["info"]["performance"]
@@ -96,15 +138,27 @@ class WorkerTask:
             self.logger.info("Qemu execution failed for node %d." % meta_data["id"])
             results = self.logic.create_update(meta_data["state"], {"crashing": True})
             self.conn.send_node_abort(meta_data["id"], results)
+            self._reset_ooxml_context()
             raise
 
+        payload_for_manager = None
         if new_payload:
             default_info = {"method": "validate_bits", "parent": meta_data["id"]}
-            if self.validate_bits(new_payload, meta_data, default_info):
+            valid = self.validate_bits(new_payload, meta_data, default_info)
+            if valid:
                 self.logger.debug("Stage %s found alternative payload for node %d", meta_data["state"]["name"], meta_data["id"])
             else:
                 self.logger.warn("Provided alternative payload found invalid - bug in stage %s?", meta_data["state"]["name"])
-        self.conn.send_node_done(meta_data["id"], results, new_payload)
+            if self.ooxml_adapter:
+                try:
+                    payload_for_manager = self._package_payload_for_execution(new_payload)
+                except QemuIOException as exc:
+                    self.logger.error("Failed to package OOXML payload: %s", exc)
+                    payload_for_manager = None
+            else:
+                payload_for_manager = new_payload
+        self.conn.send_node_done(meta_data["id"], results, payload_for_manager)
+        self._reset_ooxml_context()
 
     def start(self):
 
@@ -171,7 +225,8 @@ class WorkerTask:
             dyn_timeout = self.q.get_timeout()
             self.q.set_timeout(self.t_hard*2)
 
-        new_res = self.__execute(data).apply_lut()
+        exec_payload = self._package_payload_for_execution(data)
+        new_res = self.__execute(exec_payload).apply_lut()
         new_array = new_res.copy_to_array()
 
         if trace:
@@ -265,11 +320,10 @@ class WorkerTask:
 
         self.logger.info("Tracing payload_%05d..", info['id'])
 
-        if len(data) > self.payload_limit:
-            data = data[:self.payload_limit]
+        exec_payload = self._package_payload_for_execution(data)
 
         try:
-            self.q.set_payload(data)
+            self.q.set_payload(exec_payload)
             old_timeout = self.q.get_timeout()
             self.q.set_timeout(0)
             self.q.set_trace_mode(True)
@@ -301,14 +355,13 @@ class WorkerTask:
 
     def execute_naked(self, data, timeout=None):
 
-        if len(data) > self.payload_limit:
-            data = data[:self.payload_limit]
+        exec_payload = self._package_payload_for_execution(data)
 
         if timeout:
             old_timeout = self.q.get_timeout()
             self.q.set_timeout(timeout)
 
-        exec_res = self.__execute(data)
+        exec_res = self.__execute(exec_payload)
 
         if timeout:
             self.q.set_timeout(old_timeout)
@@ -343,10 +396,8 @@ class WorkerTask:
 
     def execute(self, data, info, hard_timeout=False):
 
-        if len(data) > self.payload_limit:
-            data = data[:self.payload_limit]
-
-        exec_res = self.__execute(data)
+        exec_payload = self._package_payload_for_execution(data)
+        exec_res = self.__execute(exec_payload)
 
         is_new_input = self.bitmap_storage.should_send_to_manager(exec_res, exec_res.exit_reason)
         crash = exec_res.is_crash()
@@ -403,7 +454,7 @@ class WorkerTask:
                 self.q.store_crashlogs(exec_res.exit_reason, exec_res.hash())
 
             if crash or stable:
-                self.__send_to_manager(data, exec_res, info)
+                self.__send_to_manager(exec_payload, exec_res, info)
 
         # restart Qemu on crash
         if crash:
@@ -411,3 +462,4 @@ class WorkerTask:
             self.q.reload()
 
         return exec_res, is_new_input
+

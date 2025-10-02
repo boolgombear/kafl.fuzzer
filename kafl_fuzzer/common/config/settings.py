@@ -122,6 +122,9 @@ settings.validators.register(
     Validator("afl_skip_range", default=None),
     Validator("afl_arith_max", cast=int),
     Validator("radamsa", default=False, cast=bool),
+
+    Validator("ooxml_template", default=None, cast=cast_expand_path),
+    Validator("ooxml_entries", default=None),
     Validator("grimoire", default=False, cast=bool),
     Validator("redqueen", default=False, cast=bool),
     Validator("redqueen_hashes", default=False, cast=bool),

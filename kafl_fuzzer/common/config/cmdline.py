@@ -84,6 +84,11 @@ def add_args_fuzzer(parser):
     parser.add_argument('--seed-dir', metavar='<dir>', help='path to the seed directory.')
     parser.add_argument('--dict', required=False, metavar='<file>',
                         help='import dictionary file for use in havoc stage.', default=None)
+
+    parser.add_argument('--ooxml-template', metavar='<file>',
+                        help='path to OOXML container used as execution wrapper (e.g. docx/pptx/vsdx).')
+    parser.add_argument('--ooxml-entry', dest='ooxml_entries', metavar='<path>', action='append',
+                        help='ZIP internal path that should be mutated inside the OOXML container.')
     parser.add_argument('--funky', required=False, help='perform extra validation and store funky inputs.',
                         action='store_true', default=False)
     parser.add_argument('-D', '--afl-dumb-mode', required=False, help='skip deterministic stage (dumb mode)',
