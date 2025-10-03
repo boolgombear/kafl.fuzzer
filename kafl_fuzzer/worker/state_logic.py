@@ -508,36 +508,16 @@ class FuzzingStateLogic:
             if self.stage_timeout_reached():
                 return True, det_info
 
-        # Walking bitflips
+        # Walking bitflips (disabled)
         if det_info["stage"] == "flip_1":
-            bitflip.mutate_seq_walking_bits(payload_array,      self.execute, skip_null=skip_zero, effector_map=limiter_map)
-            bitflip.mutate_seq_two_walking_bits(payload_array,  self.execute, skip_null=skip_zero, effector_map=limiter_map)
-            bitflip.mutate_seq_four_walking_bits(payload_array, self.execute, skip_null=skip_zero, effector_map=limiter_map)
-
             det_info["stage"] = "flip_8"
             if self.stage_timeout_reached():
                 return True, det_info
 
-        # Walking byte sets..
+        # Walking byte sets (disabled)
         if det_info["stage"] == "flip_8":
-            # Generate AFL-style effector map based on walking_bytes()
-            if use_effector_map:
-                self.logger.debug("Preparing effector map..")
-                effector_map = bytearray(limiter_map)
-
-            bitflip.mutate_seq_walking_byte(payload_array, self.execute, skip_null=skip_zero, limiter_map=limiter_map, effector_map=effector_map)
-
-            if use_effector_map:
-                self.dilate_effector_map(effector_map, limiter_map)
-            else:
-                effector_map = limiter_map
-
-            bitflip.mutate_seq_two_walking_bytes(payload_array,  self.execute, effector_map=effector_map)
-            bitflip.mutate_seq_four_walking_bytes(payload_array, self.execute, effector_map=effector_map)
-
             det_info["stage"] = "arith"
-            if effector_map:
-                det_info["eff_map"] = bytearray(effector_map)
+            det_info.pop("eff_map", None)
             if self.stage_timeout_reached():
                 return True, det_info
 
