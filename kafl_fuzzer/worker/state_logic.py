@@ -133,19 +133,18 @@ class FuzzingStateLogic:
             new_payload, xml_metadata = self.handle_initial(payload, metadata)
             return self.create_update({"name": "redq/grim"}, {"xml_info": xml_metadata}), new_payload
         elif metadata["state"]["name"] == "redq/grim":
-            grimoire_info = self.handle_grimoire_inference(payload, metadata)
-            self.handle_redqueen(payload, metadata)
-            return self.create_update({"name": "deterministic"}, {"grimoire": grimoire_info}), None
+            return self.create_update({"name": "deterministic"}, None), None
         elif metadata["state"]["name"] == "deterministic":
-            resume, afl_det_info = self.handle_deterministic(payload, metadata)
-            if resume:
-                return self.create_update({"name": "deterministic"}, {"afl_det_info": afl_det_info}), None
-            return self.create_update({"name": "havoc"}, {"afl_det_info": afl_det_info}), None
+            xml_info = self.xml_info or xml_mutations.XMLSeedInfo()
+            if payload:
+                self.stage_update_label("xml_struct")
+                xml_mutations.mutate_seq_xml_structured(payload, self.execute, xml_info)
+                self.stage_update_label("xml_havoc")
+                xml_mutations.mutate_seq_xml_havoc(payload, self.execute, xml_info, max_iterations=1)
+            return self.create_update({"name": "final"}, None), None
         elif metadata["state"]["name"] == "havoc":
-            self.handle_havoc(payload, metadata)
             return self.create_update({"name": "final"}, None), None
         elif metadata["state"]["name"] == "final":
-            self.handle_havoc(payload, metadata)
             return self.create_update({"name": "final"}, None), None
         else:
             raise ValueError("Unknown task stage %s" % metadata["state"]["name"])
