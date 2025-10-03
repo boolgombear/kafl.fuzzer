@@ -121,8 +121,11 @@ class FuzzingStateLogic:
     def process_node(self, payload: bytes, metadata):
         self.init_stage_info(metadata)
 
-        if payload is not None:
-            parsed_info = xml_mutations.extract_xml_features(payload)
+        xml_payload = payload
+        if self.worker.ooxml_adapter and payload is not None:
+            xml_payload = self.worker.ooxml_adapter.spawn_mutation_base(payload)
+        if xml_payload is not None:
+            parsed_info = xml_mutations.extract_xml_features(xml_payload)
             if parsed_info is not None:
                 if self.xml_info is None:
                     self.xml_info = parsed_info

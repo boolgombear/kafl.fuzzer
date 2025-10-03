@@ -77,6 +77,12 @@ class OOXMLAdapter:
     def extract_entry(self, archive_bytes: bytes) -> bytes:
         return self.extract_entry_from_context(self.context_from_bytes(archive_bytes))
 
+    def spawn_mutation_base(self, archive_bytes: bytes) -> bytes:
+        try:
+            return self.extract_entry(archive_bytes)
+        except (FileNotFoundError, ValueError):
+            return archive_bytes
+
     def build_archive(
         self,
         entry_data: bytes,
