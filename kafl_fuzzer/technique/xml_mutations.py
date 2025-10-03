@@ -506,11 +506,23 @@ def _emit_xml_mutation(original_payload: bytes, mutated_root: ET.Element, xml_in
         if differing <= 2 and diff_len <= 2:
             return False
 
+    result = func(mutated_bytes, label=label)
+    is_new = False
+    if isinstance(result, tuple):
+        if len(result) >= 2:
+            is_new = bool(result[1])
+        elif result:
+            is_new = bool(result[0])
+    else:
+        is_new = bool(result)
+
+    if not is_new:
+        return False
+
     _register_discovered_tokens(xml_info, mutated_info)
     if xml_info is not None:
         xml_info.merge(mutated_info)
 
-    func(mutated_bytes, label=label)
     return True
 
 
