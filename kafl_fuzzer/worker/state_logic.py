@@ -132,22 +132,36 @@ class FuzzingStateLogic:
                 else:
                     self.xml_info.merge(parsed_info)
 
-        if metadata["state"]["name"] == "initial":
+        state_name = metadata["state"]["name"]
+
+        if state_name == "initial":
             new_payload, xml_metadata = self.handle_initial(payload, metadata)
             return self.create_update({"name": "redq/grim"}, {"xml_info": xml_metadata}), new_payload
-        elif metadata["state"]["name"] == "redq/grim":
-            return self.create_update({"name": "deterministic"}, None), None
-        elif metadata["state"]["name"] == "deterministic":
-            xml_info = self.xml_info or xml_mutations.XMLSeedInfo()
+        elif state_name == "redq/grim":
+            grimoire_info: Dict[str, Any] = {}
             if payload:
-                self.stage_update_label("xml_struct")
-                xml_mutations.mutate_seq_xml_structured(payload, self.execute, xml_info)
-                self.stage_update_label("xml_havoc")
-                xml_mutations.mutate_seq_xml_havoc(payload, self.execute, xml_info, max_iterations=1)
+                grimoire_info = self.handle_grimoire_inference(payload, metadata)
+                self.handle_redqueen(payload, metadata)
+            additional: Dict[str, Any] = {}
+            if grimoire_info:
+                additional["grimoire"] = grimoire_info
+            return self.create_update({"name": "deterministic"}, additional or None), None
+        elif state_name == "deterministic":
+            if not payload:
+                return self.create_update({"name": "havoc"}, None), None
+            needs_more, det_info = self.handle_deterministic(payload, metadata)
+            next_state = {"name": "deterministic"} if needs_more else {"name": "havoc"}
+            additional: Dict[str, Any] = {}
+            if det_info:
+                additional["afl_det_info"] = det_info
+            if self.xml_info:
+                additional["xml_info"] = self.xml_info.to_metadata()
+            return self.create_update(next_state, additional or None), None
+        elif state_name == "havoc":
+            if payload:
+                self.handle_havoc(payload, metadata)
             return self.create_update({"name": "final"}, None), None
-        elif metadata["state"]["name"] == "havoc":
-            return self.create_update({"name": "final"}, None), None
-        elif metadata["state"]["name"] == "final":
+        elif state_name == "final":
             return self.create_update({"name": "final"}, None), None
         else:
             raise ValueError("Unknown task stage %s" % metadata["state"]["name"])
