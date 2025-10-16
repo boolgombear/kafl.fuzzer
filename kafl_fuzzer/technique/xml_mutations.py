@@ -323,7 +323,7 @@ def _excel_cell_value_payloads() -> List[Tuple[str, str]]:
     payloads: List[Tuple[str, str]] = []
     lengths = list(_EXCEL_CELL_LENGTHS)
     # Add one random length within the desired boundary to diversify coverage.
-    random_length = rand.randint(4096, 65536)
+    random_length = 4096 + rand.int(65536 - 4096 + 1)
     if random_length not in lengths:
         lengths.append(random_length)
 
