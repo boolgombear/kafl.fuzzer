@@ -103,6 +103,55 @@ _OOXML_ATTR_VALUE_MAP = {
     'w:valCs': ['single', 'double', 'underline'],
 }
 
+_EXCEL_CELL_LENGTHS = (4096, 8192, 16384, 32768, 65536)
+_EXCEL_PATTERN_SEEDS = ("AB", "1234567890", "XYZ!", "DEADBEEF")
+_EXCEL_UNICODE_CODEPOINTS = (
+    0x0000,
+    0x0001,
+    0x0002,
+    0xD7FF,
+    0xE000,
+    0xFFFD,
+    0xFEFF,
+)
+_EXCEL_DATETIME_TEMPLATES = (
+    "9999999999999999999-12-31T23:59:59Z",
+    "999999-99-99T99:99:99.999999999Z",
+    "1970-01-01T25:61:61.999999999Z",
+    "2024-01-01T00:00:00+99:99",
+    "2024-01-01T00:00:00-99:99",
+    "0000-00-00T00:00:00Z",
+)
+_EXCEL_ALT_DATETIME_FRAGMENTS = (
+    "9999999999999999999",
+    "999999",
+    "99:99:99",
+    "+99:99",
+    "-99:99",
+)
+_EXCEL_CELL_REFERENCE_MUTATIONS = (
+    "IV65536",
+    "XFD1048576",
+    "R1048576C16384",
+    "",
+    "A0",
+    "A1048577",
+    "XFE1",
+)
+_EXCEL_CELL_TYPE_MUTATIONS = (
+    ("n", "TEXT_MISMATCH"),
+    ("n", "NaN"),
+    ("str", "123.456"),
+    ("str", "-INF"),
+    ("b", "maybe"),
+    ("b", "2"),
+    ("e", "#VALUE!"),
+    ("d", "9999-12-31T23:59:59.999999999Z"),
+    ("datetime", "9999-12-31T99:99:99Z"),
+)
+_EXCEL_CELL_STYLE_MUTATIONS = ("", "0", "1", "64", "99", "4096", "16384", "4294967295", "-1")
+_EXCEL_ROW_REFERENCE_MUTATIONS = ("0", "1", "1048576", "1048577", "999999", "-1")
+
 
 @dataclass
 class XMLSeedInfo:
@@ -242,6 +291,443 @@ def _element_to_bytes(root: ET.Element) -> bytes:
     return ET.tostring(root, encoding="utf-8")
 
 
+def _excel_ns(reference_tag: str, local_name: str) -> str:
+    if reference_tag.startswith('{'):
+        namespace = reference_tag.split('}', 1)[0][1:]
+        return f'{{{namespace}}}{local_name}'
+    return local_name
+
+
+def _repeat_to_length(seed: str, length: int) -> str:
+    if not seed:
+        return seed
+    repetitions = (length // len(seed)) + 1
+    return (seed * repetitions)[:length]
+
+
+def _excel_unicode_payload(length: int) -> str:
+    # Mix control chars, BMP edge cases, and printable ASCII to stress different decoders.
+    base_sequence = ''.join(chr(code_point) for code_point in _EXCEL_UNICODE_CODEPOINTS)
+    ascii_mix = ''.join(chr(65 + (idx % 26)) for idx in range(len(base_sequence)))
+    seed = base_sequence + ascii_mix
+    return _repeat_to_length(seed, length)
+
+
+def _excel_utf16le_payload(length: int) -> str:
+    # Simulate UTF-16LE like data inside XML text nodes.
+    base = ''.join('A\u0000B\u0000' for _ in range(max(1, length // 4)))
+    return base[:length]
+
+
+def _excel_cell_value_payloads() -> List[Tuple[str, str]]:
+    payloads: List[Tuple[str, str]] = []
+    lengths = list(_EXCEL_CELL_LENGTHS)
+    # Add one random length within the desired boundary to diversify coverage.
+    random_length = rand.randint(4096, 65536)
+    if random_length not in lengths:
+        lengths.append(random_length)
+
+    for length in lengths:
+        payloads.append(("cell_value_overflow", "A" * length))
+        pattern_seed = ''.join(_EXCEL_PATTERN_SEEDS)
+        payloads.append(("cell_value_pattern", _repeat_to_length(pattern_seed, length)))
+        alternator = ''.join(chr((32 + (i % 95))) for i in range(length))
+        payloads.append(("cell_value_boundary", alternator[:length]))
+        payloads.append(("cell_value_unicode", _excel_unicode_payload(length)))
+        payloads.append(("cell_value_utf16", _excel_utf16le_payload(length)))
+
+    return payloads
+
+
+def _excel_datetime_payloads(original: Optional[str] = None) -> List[str]:
+    payloads = list(_EXCEL_DATETIME_TEMPLATES)
+    # Combine fragments to craft hybrid ISO8601 strings.
+    payloads.append(f"{'9' * 20}-{'9' * 2}-{'9' * 2}T{'9' * 2}:{'9' * 2}:{'9' * 2}Z")
+    payloads.append("0001-01-01T00:00:00.000000000Z")
+    payloads.append("1970-01-01T00:00:00+00:00")
+    payloads.append("999999999-12-31T23:59:59.999999999-99:99")
+
+    if original and original.strip():
+        stripped = original.strip()
+        payloads.append(stripped + "+99:99")
+        payloads.append(stripped + "-99:99")
+
+    dynamic_frag = f"{_EXCEL_ALT_DATETIME_FRAGMENTS[0]}-12-31T{_EXCEL_ALT_DATETIME_FRAGMENTS[2]}Z"
+    payloads.append(dynamic_frag)
+    return payloads
+
+
+def _excel_collect_nodes(root: ET.Element, suffix: str) -> List[ET.Element]:
+    return [node for node in root.iter() if node.tag.endswith(suffix)]
+
+
+def _excel_column_name(index: int) -> str:
+    if index < 0:
+        return "A"
+    result = ""
+    while True:
+        index, remainder = divmod(index, 26)
+        result = chr(65 + remainder) + result
+        if index == 0:
+            break
+        index -= 1
+    return result
+
+
+def _excel_reference_mutations(root: ET.Element) -> List[Tuple[str, ET.Element]]:
+    mutations: List[Tuple[str, ET.Element]] = []
+    sheet_datas = _excel_collect_nodes(root, 'sheetData')
+    if not sheet_datas:
+        return mutations
+
+    sheet_data_samples = sheet_datas[:3]
+
+    # Duplicate reference mutation: clone cells preserving the same reference id.
+    for sheet_idx, sheet_data in enumerate(sheet_data_samples):
+        rows = list(sheet_data)
+        if not rows:
+            continue
+        for row_idx, row in enumerate(rows[:3]):
+            cells = list(row)
+            if not cells:
+                continue
+            for cell_idx, cell in enumerate(cells[:2]):
+                mutated = _clone_tree(root)
+                mutated_sheet_data = _excel_collect_nodes(mutated, 'sheetData')[sheet_idx]
+                mutated_row = list(mutated_sheet_data)[row_idx]
+                mutated_cell = list(mutated_row)[cell_idx]
+                duplicated = _clone_tree(mutated_cell)
+                mutated_row.insert(cell_idx + 1, duplicated)
+                mutations.append(("excel_duplicate_refs", mutated))
+                break
+            if mutations:
+                break
+        if mutations:
+            break
+
+    sheet_data = sheet_datas[0]
+    row_tag = _excel_ns(sheet_data.tag, 'row')
+    cell_tag = _excel_ns(sheet_data.tag, 'c')
+    formula_tag = _excel_ns(sheet_data.tag, 'f')
+    value_tag = _excel_ns(sheet_data.tag, 'v')
+
+    # Circular reference mutation: inject formula cells that reference each other.
+    mutated = _clone_tree(root)
+    mutated_sheet = _excel_collect_nodes(mutated, 'sheetData')[0]
+    circular_row = ET.Element(row_tag, attrib={'r': '1048576'})
+    formula_a = ET.Element(cell_tag, attrib={'r': 'A1048576'})
+    formula_b = ET.Element(cell_tag, attrib={'r': 'B1048576'})
+    f_a = ET.Element(formula_tag)
+    f_a.text = "Sheet1!B1048576"
+    f_b = ET.Element(formula_tag)
+    f_b.text = "Sheet1!A1048576"
+    v_a = ET.Element(value_tag)
+    v_a.text = "0"
+    v_b = ET.Element(value_tag)
+    v_b.text = "0"
+    formula_a.extend([f_a, v_a])
+    formula_b.extend([f_b, v_b])
+    circular_row.extend([formula_a, formula_b])
+    mutated_sheet.append(circular_row)
+    mutations.append(("excel_circular_refs", mutated))
+
+    # Null reference mutation: create cells with empty references and dangling values.
+    mutated = _clone_tree(root)
+    mutated_sheet = _excel_collect_nodes(mutated, 'sheetData')[0]
+    null_row = ET.Element(row_tag, attrib={'r': '2'})
+    null_cell = ET.Element(cell_tag, attrib={'r': ''})
+    null_value = ET.Element(value_tag)
+    null_value.text = ''
+    null_cell.append(null_value)
+    mutated_sheet.append(null_row)
+    null_row.append(null_cell)
+    mutations.append(("excel_null_refs", mutated))
+
+    # Race condition style mutation: reorder rows and duplicate high index entries.
+    mutated = _clone_tree(root)
+    mutated_sheet = _excel_collect_nodes(mutated, 'sheetData')[0]
+    rows = list(mutated_sheet)
+    if rows:
+        duplicated_row = _clone_tree(rows[-1])
+        mutated_sheet.insert(0, duplicated_row)
+        mutated_sheet.append(_clone_tree(rows[0]))
+        mutations.append(("excel_race_refs", mutated))
+
+    # Dense row mutation: add maximal row with many cells.
+    mutated = _clone_tree(root)
+    mutated_sheet = _excel_collect_nodes(mutated, 'sheetData')[0]
+    dense_row = ET.Element(row_tag, attrib={'r': '1048576'})
+    for col_idx in range(0, 64):
+        cell_ref = f"{_excel_column_name(col_idx)}1048576"
+        dense_cell = ET.Element(cell_tag, attrib={'r': cell_ref, 't': 'str'})
+        dense_value = ET.Element(value_tag)
+        dense_value.text = _repeat_to_length("DENSE", 256)
+        dense_cell.append(dense_value)
+        dense_row.append(dense_cell)
+    mutated_sheet.append(dense_row)
+    mutations.append(("excel_dense_row", mutated))
+
+    # Sparse/invalid references row mutation.
+    mutated = _clone_tree(root)
+    mutated_sheet = _excel_collect_nodes(mutated, 'sheetData')[0]
+    sparse_row = ET.Element(row_tag, attrib={'r': '0'})
+    for ref in _EXCEL_CELL_REFERENCE_MUTATIONS:
+        sparse_cell = ET.Element(cell_tag, attrib={'r': ref, 't': 'n'})
+        sparse_value = ET.Element(value_tag)
+        sparse_value.text = "0"
+        sparse_cell.append(sparse_value)
+        sparse_row.append(sparse_cell)
+    mutated_sheet.append(sparse_row)
+    mutations.append(("excel_sparse_row", mutated))
+
+    return mutations
+
+
+def _is_excel_cell(element: ET.Element) -> bool:
+    return element.tag.endswith('c')
+
+
+def _is_excel_row(element: ET.Element) -> bool:
+    return element.tag.endswith('row')
+
+
+def _find_child_by_suffix(element: ET.Element, suffix: str) -> Optional[ET.Element]:
+    for child in element:
+        if child.tag.endswith(suffix):
+            return child
+    return None
+
+
+def _ensure_child_by_suffix(element: ET.Element, suffix: str) -> ET.Element:
+    child = _find_child_by_suffix(element, suffix)
+    if child is not None:
+        return child
+    new_child = ET.Element(_excel_ns(element.tag, suffix))
+    element.append(new_child)
+    return new_child
+
+
+def _remove_children_by_suffix(element: ET.Element, suffix: str):
+    for child in list(element):
+        if child.tag.endswith(suffix):
+            element.remove(child)
+
+
+def _apply_excel_cell_attribute_mutations(root: ET.Element, elements: List[ET.Element], maybe_emit) -> bool:
+    for idx, element in enumerate(elements):
+        if not _is_excel_cell(element):
+            continue
+
+        current_ref = element.attrib.get('r')
+        for candidate_ref in _EXCEL_CELL_REFERENCE_MUTATIONS:
+            if candidate_ref == current_ref:
+                continue
+            mutated_root = _clone_tree(root)
+            mutated_cell = _iter_elements(mutated_root)[idx]
+            mutated_cell.attrib['r'] = candidate_ref
+            if maybe_emit(mutated_root, "excel_attr_ref"):
+                return True
+
+        for style in _EXCEL_CELL_STYLE_MUTATIONS:
+            if element.attrib.get('s') == style:
+                continue
+            mutated_root = _clone_tree(root)
+            mutated_cell = _iter_elements(mutated_root)[idx]
+            if style:
+                mutated_cell.attrib['s'] = style
+            elif 's' in mutated_cell.attrib:
+                del mutated_cell.attrib['s']
+            if maybe_emit(mutated_root, "excel_attr_style"):
+                return True
+
+        for new_type, new_value in _EXCEL_CELL_TYPE_MUTATIONS:
+            mutated_root = _clone_tree(root)
+            mutated_cell = _iter_elements(mutated_root)[idx]
+            mutated_cell.attrib['t'] = new_type
+            if new_type == "inlineStr":
+                _remove_children_by_suffix(mutated_cell, 'v')
+                inline_container = _ensure_child_by_suffix(mutated_cell, 'is')
+                text_child = _ensure_child_by_suffix(inline_container, 't')
+                text_child.text = new_value
+            else:
+                inline_container = _find_child_by_suffix(mutated_cell, 'is')
+                if inline_container is not None:
+                    mutated_cell.remove(inline_container)
+                value_child = _ensure_child_by_suffix(mutated_cell, 'v')
+                value_child.text = new_value
+            if maybe_emit(mutated_root, "excel_attr_type"):
+                return True
+    return False
+
+
+def _apply_excel_row_attribute_mutations(root: ET.Element, elements: List[ET.Element], maybe_emit) -> bool:
+    for idx, element in enumerate(elements):
+        if not _is_excel_row(element):
+            continue
+        current_ref = element.attrib.get('r')
+        for candidate_ref in _EXCEL_ROW_REFERENCE_MUTATIONS:
+            if candidate_ref == current_ref:
+                continue
+            mutated_root = _clone_tree(root)
+            mutated_row = _iter_elements(mutated_root)[idx]
+            mutated_row.attrib['r'] = candidate_ref
+            if maybe_emit(mutated_root, "excel_row_ref"):
+                return True
+    return False
+
+
+def _apply_excel_cell_value_mutations(root: ET.Element, elements: List[ET.Element], maybe_emit) -> bool:
+    payloads = _excel_cell_value_payloads()
+    for idx, element in enumerate(elements):
+        if not _is_excel_cell(element):
+            continue
+        value_child = _find_child_by_suffix(element, 'v')
+        if value_child is None:
+            continue
+        for label_suffix, new_text in payloads:
+            mutated_root = _clone_tree(root)
+            target_cell = _iter_elements(mutated_root)[idx]
+            mutated_value = _find_child_by_suffix(target_cell, 'v')
+            if mutated_value is None:
+                continue
+            mutated_value.text = new_text
+            if maybe_emit(mutated_root, f"excel_{label_suffix}"):
+                return True
+    return False
+
+
+def _apply_excel_datetime_mutations(root: ET.Element, elements: List[ET.Element], maybe_emit) -> bool:
+    for idx, element in enumerate(elements):
+        if not _is_excel_cell(element):
+            continue
+        cell_type = element.attrib.get('t', '')
+        value_child = _find_child_by_suffix(element, 'v')
+        if value_child is None:
+            continue
+        original_text = value_child.text or ''
+        is_datetime_cell = cell_type in ('d', 'date') or _ISO8601_REGEX.match(original_text or '')
+        if not is_datetime_cell:
+            continue
+        for variant_idx, new_text in enumerate(_excel_datetime_payloads(original_text)):
+            mutated_root = _clone_tree(root)
+            target_cell = _iter_elements(mutated_root)[idx]
+            mutated_value = _find_child_by_suffix(target_cell, 'v')
+            if mutated_value is None:
+                continue
+            mutated_value.text = new_text
+            if maybe_emit(mutated_root, f"excel_datetime_{variant_idx}"):
+                return True
+    return False
+
+
+def _apply_excel_reference_structure_mutations(root: ET.Element, maybe_emit) -> bool:
+    for label_suffix, mutated_root in _excel_reference_mutations(root):
+        if maybe_emit(mutated_root, label_suffix):
+            return True
+    return False
+
+
+def _random_excel_cell_mutation(root: ET.Element, elements: List[ET.Element]) -> Optional[Tuple[ET.Element, str]]:
+    candidate_indices = []
+    for idx, element in enumerate(elements):
+        if _is_excel_cell(element) and _find_child_by_suffix(element, 'v') is not None:
+            candidate_indices.append(idx)
+    if not candidate_indices:
+        return None
+
+    target_idx = rand.select(candidate_indices)
+    payload_label, new_text = rand.select(_excel_cell_value_payloads())
+    mutated_root = _clone_tree(root)
+    mutated_cell = _iter_elements(mutated_root)[target_idx]
+    mutated_value = _find_child_by_suffix(mutated_cell, 'v')
+    if mutated_value is None:
+        return None
+    mutated_value.text = new_text
+    return mutated_root, f"excel_havoc_{payload_label}"
+
+
+def _random_excel_datetime_mutation(root: ET.Element, elements: List[ET.Element]) -> Optional[Tuple[ET.Element, str]]:
+    candidate_indices = []
+    for idx, element in enumerate(elements):
+        if not _is_excel_cell(element):
+            continue
+        value_child = _find_child_by_suffix(element, 'v')
+        if value_child is None:
+            continue
+        text = value_child.text or ''
+        cell_type = element.attrib.get('t', '')
+        if cell_type in ('d', 'date') or _ISO8601_REGEX.match(text):
+            candidate_indices.append((idx, text))
+    if not candidate_indices:
+        return None
+
+    target_idx, original_text = rand.select(candidate_indices)
+    mutated_root = _clone_tree(root)
+    mutated_cell = _iter_elements(mutated_root)[target_idx]
+    mutated_value = _find_child_by_suffix(mutated_cell, 'v')
+    if mutated_value is None:
+        return None
+    mutated_value.text = rand.select(_excel_datetime_payloads(original_text))
+    return mutated_root, "excel_havoc_datetime"
+
+
+def _random_excel_reference_mutation(root: ET.Element) -> Optional[Tuple[ET.Element, str]]:
+    mutations = _excel_reference_mutations(root)
+    if not mutations:
+        return None
+    label, mutated_root = rand.select(mutations)
+    return mutated_root, f"{label}_havoc"
+
+
+def _random_excel_cell_attribute_mutation(root: ET.Element, elements: List[ET.Element]) -> Optional[Tuple[ET.Element, str]]:
+    candidates = [idx for idx, element in enumerate(elements) if _is_excel_cell(element)]
+    if not candidates:
+        return None
+    target_idx = rand.select(candidates)
+    mutated_root = _clone_tree(root)
+    mutated_cell = _iter_elements(mutated_root)[target_idx]
+
+    choice = rand.int(3)
+    if choice == 0:
+        new_ref = rand.select(_EXCEL_CELL_REFERENCE_MUTATIONS)
+        mutated_cell.attrib['r'] = new_ref
+        label = "excel_havoc_attr_ref"
+    elif choice == 1:
+        new_style = rand.select(_EXCEL_CELL_STYLE_MUTATIONS)
+        if new_style:
+            mutated_cell.attrib['s'] = new_style
+        elif 's' in mutated_cell.attrib:
+            del mutated_cell.attrib['s']
+        label = "excel_havoc_attr_style"
+    else:
+        new_type, new_value = rand.select(_EXCEL_CELL_TYPE_MUTATIONS)
+        mutated_cell.attrib['t'] = new_type
+        if new_type == "inlineStr":
+            _remove_children_by_suffix(mutated_cell, 'v')
+            inline_container = _ensure_child_by_suffix(mutated_cell, 'is')
+            text_child = _ensure_child_by_suffix(inline_container, 't')
+            text_child.text = new_value
+        else:
+            inline_container = _find_child_by_suffix(mutated_cell, 'is')
+            if inline_container is not None:
+                mutated_cell.remove(inline_container)
+            value_child = _ensure_child_by_suffix(mutated_cell, 'v')
+            value_child.text = new_value
+        label = "excel_havoc_attr_type"
+    return mutated_root, label
+
+
+def _random_excel_row_attribute_mutation(root: ET.Element, elements: List[ET.Element]) -> Optional[Tuple[ET.Element, str]]:
+    candidates = [idx for idx, element in enumerate(elements) if _is_excel_row(element)]
+    if not candidates:
+        return None
+    target_idx = rand.select(candidates)
+    mutated_root = _clone_tree(root)
+    mutated_row = _iter_elements(mutated_root)[target_idx]
+    mutated_row.attrib['r'] = rand.select(_EXCEL_ROW_REFERENCE_MUTATIONS)
+    return mutated_root, "excel_havoc_row_ref"
+
+
 _LOCAL_DICT_CACHE: Set[bytes] = set()
 
 
@@ -249,6 +735,7 @@ _TAG_REGEX = re.compile(r'<\s*/?\s*([A-Za-z_:][\w:.-]*)')
 _ATTR_REGEX = re.compile(r'([A-Za-z_:][\w:.-]*)\s*=')
 _ATTR_VALUE_REGEX = re.compile(r'=\s*(?:"([^"]*)"|\'([^\']*)\')')
 _SIMPLE_NAME_REGEX = re.compile(r'^[A-Za-z_:][\w:.-]*$')
+_ISO8601_REGEX = re.compile(r'^\s*\d{4,}-\d{2}-\d{2}T')
 
 
 def _decode_token_bytes(data: bytes) -> str:
@@ -546,6 +1033,17 @@ def mutate_seq_xml_structured(payload: bytes, func, xml_info: XMLSeedInfo, max_o
             operations += 1
         return operations >= max_operations
 
+    if _apply_excel_cell_attribute_mutations(root, elements, maybe_emit):
+        return
+    if _apply_excel_row_attribute_mutations(root, elements, maybe_emit):
+        return
+    if _apply_excel_cell_value_mutations(root, elements, maybe_emit):
+        return
+    if _apply_excel_datetime_mutations(root, elements, maybe_emit):
+        return
+    if _apply_excel_reference_structure_mutations(root, maybe_emit):
+        return
+
     # Tag renaming
     for idx, element in enumerate(elements):
         for candidate in tag_candidates:
@@ -620,36 +1118,66 @@ def mutate_seq_xml_havoc(payload: bytes, func, xml_info: XMLSeedInfo, max_iterat
             _mutate_xml_textual(payload, func, xml_info, 1, label_prefix="xml_havoc_txt")
             return
 
-        choice = rand.int(5)
-        target_idx = rand.int(len(elements))
-        target = elements[target_idx]
-        mutated_root = _clone_tree(root)
-        mutated_elements = _iter_elements(mutated_root)
-        mutated_target = mutated_elements[target_idx]
+        choice = rand.int(10)
+        mutated_root: Optional[ET.Element] = None
+        label: Optional[str] = None
 
-        if choice == 0 and mutated_target.text is not None:
-            mutated_target.text = rand.select(text_candidates or _DEFAULT_TEXT_TOKENS)
-            label = "xml_havoc_text"
-        elif choice == 1 and mutated_target.attrib:
-            attr_key = rand.select(list(mutated_target.attrib.keys()))
-            mutated_target.set(attr_key, rand.select(attr_values or _DEFAULT_TEXT_TOKENS))
-            label = "xml_havoc_attr"
-        elif choice == 2:
-            mutated_target.tag = rand.select(tag_candidates or _DEFAULT_TAG_TOKENS)
-            label = "xml_havoc_tag"
-        elif choice == 3:
-            # Duplicate a subtree
-            parent_map = {c: p for p in mutated_root.iter() for c in p}
-            parent = parent_map.get(mutated_target)
-            if parent is not None:
-                parent.append(_clone_tree(mutated_target))
-            label = "xml_havoc_dup"
+        if choice < 5:
+            target_idx = rand.int(len(elements))
+            target = elements[target_idx]
+            mutated_root = _clone_tree(root)
+            mutated_elements = _iter_elements(mutated_root)
+            mutated_target = mutated_elements[target_idx]
+
+            if choice == 0 and mutated_target.text is not None:
+                mutated_target.text = rand.select(text_candidates or _DEFAULT_TEXT_TOKENS)
+                label = "xml_havoc_text"
+            elif choice == 1 and mutated_target.attrib:
+                attr_key = rand.select(list(mutated_target.attrib.keys()))
+                mutated_target.set(attr_key, rand.select(attr_values or _DEFAULT_TEXT_TOKENS))
+                label = "xml_havoc_attr"
+            elif choice == 2:
+                mutated_target.tag = rand.select(tag_candidates or _DEFAULT_TAG_TOKENS)
+                label = "xml_havoc_tag"
+            elif choice == 3:
+                # Duplicate a subtree
+                parent_map = {c: p for p in mutated_root.iter() for c in p}
+                parent = parent_map.get(mutated_target)
+                if parent is not None:
+                    parent.append(_clone_tree(mutated_target))
+                label = "xml_havoc_dup"
+            else:
+                # Remove node if possible
+                parent_map = {c: p for p in mutated_root.iter() for c in p}
+                parent = parent_map.get(mutated_target)
+                if parent is not None:
+                    parent.remove(mutated_target)
+                label = "xml_havoc_del"
+        elif choice == 5:
+            result = _random_excel_cell_attribute_mutation(root, elements)
+            if result is None:
+                continue
+            mutated_root, label = result
+        elif choice == 6:
+            result = _random_excel_row_attribute_mutation(root, elements)
+            if result is None:
+                continue
+            mutated_root, label = result
+        elif choice == 7:
+            result = _random_excel_cell_mutation(root, elements)
+            if result is None:
+                continue
+            mutated_root, label = result
+        elif choice == 8:
+            result = _random_excel_datetime_mutation(root, elements)
+            if result is None:
+                continue
+            mutated_root, label = result
         else:
-            # Remove node if possible
-            parent_map = {c: p for p in mutated_root.iter() for c in p}
-            parent = parent_map.get(mutated_target)
-            if parent is not None:
-                parent.remove(mutated_target)
-            label = "xml_havoc_del"
+            result = _random_excel_reference_mutation(root)
+            if result is None:
+                continue
+            mutated_root, label = result
 
-        _emit_xml_mutation(payload, mutated_root, xml_info, func, label)
+        if mutated_root is not None and label is not None:
+            _emit_xml_mutation(payload, mutated_root, xml_info, func, label)
