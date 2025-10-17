@@ -243,6 +243,10 @@ _EXCEL_DRAWING_REL_IDS = (
     "rId2147483647",
     "rId4294967295",
 )
+_BYPASS_HYPERLINK_REPEAT = 64
+_BYPASS_MEMORY_ROWS = 64
+_BYPASS_EXT_URI = "{BYPASS_EXT}"
+_BYPASS_EXT_PAYLOAD = "X" * 2048
 _EXCEL_HYPERLINK_LOCATIONS = (
     "Sheet999!A1048576",
     "HiddenSheet!IV65536",
@@ -424,6 +428,44 @@ def _excel_ns(reference_tag: str, local_name: str) -> str:
         namespace = reference_tag.split('}', 1)[0][1:]
         return f'{{{namespace}}}{local_name}'
     return local_name
+
+
+def _get_or_create_child_by_suffix(element: ET.Element, suffix: str) -> ET.Element:
+    existing = _find_child_by_suffix(element, suffix)
+    if existing is not None:
+        return existing
+    return _ensure_child_by_suffix(element, suffix)
+
+
+def _clear_children(element: ET.Element):
+    for child in list(element):
+        element.remove(child)
+
+
+def _create_cell(cell_tag: str, value_tag: str, ref: str, style: Optional[str] = None,
+                 cell_type: Optional[str] = None, value: Optional[str] = None) -> ET.Element:
+    attrib = {'r': ref}
+    if style is not None:
+        attrib['s'] = style
+    if cell_type is not None:
+        attrib['t'] = cell_type
+    cell = ET.Element(cell_tag, attrib=attrib)
+    if value is not None:
+        value_elem = ET.Element(value_tag)
+        value_elem.text = value
+        cell.append(value_elem)
+    return cell
+
+
+def _create_formula_cell(cell_tag: str, value_tag: str, formula_tag: str, ref: str,
+                         formula_text: str, attrib: Optional[Dict[str, str]] = None) -> ET.Element:
+    cell = ET.Element(cell_tag, attrib={'r': ref})
+    if attrib:
+        cell.attrib.update(attrib)
+    formula_elem = ET.Element(formula_tag)
+    formula_elem.text = formula_text
+    cell.append(formula_elem)
+    return cell
 
 
 def _repeat_to_length(seed: str, length: int) -> str:
@@ -1125,6 +1167,157 @@ def _apply_excel_datetime_mutations(root: ET.Element, elements: List[ET.Element]
     return False
 
 
+def _excel_bypass_mutations(root: ET.Element) -> List[Tuple[str, ET.Element]]:
+    mutations: List[Tuple[str, ET.Element]] = []
+
+    def prepare_basic(mut_root: ET.Element):
+        if 'xmlns:xr' not in mut_root.attrib:
+            mut_root.set('xmlns:xr', 'http://schemas.microsoft.com/office/spreadsheetml/2014/revision')
+        dimension = _get_or_create_child_by_suffix(mut_root, 'dimension')
+        sheet_views = _get_or_create_child_by_suffix(mut_root, 'sheetViews')
+        sheet_view = _get_or_create_child_by_suffix(sheet_views, 'sheetView')
+        sheet_view.set('workbookViewId', '0')
+        sheet_format = _get_or_create_child_by_suffix(mut_root, 'sheetFormatPr')
+        sheet_format.set('defaultRowHeight', '15')
+        sheet_data = _get_or_create_child_by_suffix(mut_root, 'sheetData')
+        return dimension, sheet_data
+
+    def build_safe_sheet(mut_root: ET.Element, dimension: ET.Element, sheet_data: ET.Element):
+        dimension.set('ref', 'A1:C3')
+        _clear_children(sheet_data)
+        row_tag = _excel_ns(sheet_data.tag, 'row')
+        cell_tag = _excel_ns(sheet_data.tag, 'c')
+        value_tag = _excel_ns(sheet_data.tag, 'v')
+        row = ET.Element(row_tag, attrib={'r': '1', 'spans': '1:3'})
+        for idx, text in enumerate(("safe", "data", "test"), start=1):
+            ref = chr(ord('A') + idx - 1) + "1"
+            cell = _create_cell(cell_tag, value_tag, ref, style='0', cell_type='str', value=text)
+            row.append(cell)
+        sheet_data.append(row)
+        return row_tag, cell_tag, value_tag
+
+    def ensure_merge(mut_root: ET.Element, ranges: Sequence[str]):
+        merge_cells = _get_or_create_child_by_suffix(mut_root, 'mergeCells')
+        _clear_children(merge_cells)
+        merge_cells.set('count', str(len(ranges)))
+        merge_tag = _excel_ns(merge_cells.tag, 'mergeCell')
+        for ref in ranges:
+            merge_cells.append(ET.Element(merge_tag, attrib={'ref': ref}))
+        return merge_cells
+
+    # Stage 1: safe baseline
+    stage1 = _clone_tree(root)
+    dimension, sheet_data = prepare_basic(stage1)
+    row_tag, cell_tag, value_tag = build_safe_sheet(stage1, dimension, sheet_data)
+    mutations.append(("excel_bypass_stage1", stage1))
+
+    # Stage 2: FirePendingEvents pathway with heavy merges and conditional formatting
+    stage2 = _clone_tree(stage1)
+    merges = [
+        "A1:XFD1048576",
+        "A1:A1048576",
+        "A1:XFD1",
+    ]
+    merge_cells = ensure_merge(stage2, merges)
+    merge_cells.set('count', "999999")
+    cf = _get_or_create_child_by_suffix(stage2, 'conditionalFormatting')
+    cf.set('sqref', 'A1:XFD1048576')
+    cf_rule = _get_or_create_child_by_suffix(cf, 'cfRule')
+    cf_rule.attrib.update({'type': 'expression', 'priority': '1'})
+    formula_tag = _excel_ns(cf_rule.tag, 'formula')
+    _clear_children(cf_rule)
+    formula_elem = ET.Element(formula_tag)
+    formula_elem.text = "=TRUE"
+    cf_rule.append(formula_elem)
+    mutations.append(("excel_bypass_stage2", stage2))
+
+    # Stage 3: Formula and hyperlink stress
+    stage3 = _clone_tree(stage2)
+    sheet_data3 = _get_or_create_child_by_suffix(stage3, 'sheetData')
+    row_formula = ET.Element(row_tag, attrib={'r': '2', 'spans': '1:5'})
+    formula_tag_cell = _excel_ns(sheet_data3.tag, 'f')
+    array_formula = _create_formula_cell(
+        cell_tag, value_tag, formula_tag_cell, 'A2',
+        "=SUM(IF(ISERROR(LARGE(ROW(1:1000000),ROW(1:1000))),0,LARGE(ROW(1:1000000),ROW(1:1000))))",
+        {'t': 'array', 'ref': 'A2:Z1000', 'si': '0'}
+    )
+    shared_formula = _create_formula_cell(
+        cell_tag, value_tag, formula_tag_cell, 'B2',
+        '=CONCATENATE(REPT("A",65535),REPT("B",65535))',
+        {'t': 'shared', 'ref': 'B2:XFD1048576', 'si': '999999'}
+    )
+    simple_formula = _create_formula_cell(
+        cell_tag, value_tag, formula_tag_cell, 'C2',
+        '=A2+B2',
+        None
+    )
+    row_formula.extend([array_formula, shared_formula, simple_formula])
+    sheet_data3.append(row_formula)
+    hyperlinks = _get_or_create_child_by_suffix(stage3, 'hyperlinks')
+    hyperlinks.set('xmlns:xr', 'http://schemas.microsoft.com/office/spreadsheetml/2014/revision')
+    _clear_children(hyperlinks)
+    hyperlink_tag = _excel_ns(hyperlinks.tag, 'hyperlink')
+    tooltip = "A" * 1024
+    display = "B" * 512
+    for idx in range(_BYPASS_HYPERLINK_REPEAT):
+        hyperlink = ET.Element(hyperlink_tag, attrib={
+            'ref': 'A1',
+            'r:id': f"rId{idx + 1}",
+            'tooltip': tooltip,
+            'display': display,
+            'xr:uid': _EXCEL_HYPERLINK_UIDS[idx % len(_EXCEL_HYPERLINK_UIDS)],
+        })
+        hyperlinks.append(hyperlink)
+    mutations.append(("excel_bypass_stage3", stage3))
+
+    # Stage 4: Memory exhaustion and integer overflow patterns
+    stage4 = _clone_tree(stage3)
+    if 'xmlns:x14ac' not in stage4.attrib:
+        stage4.set('xmlns:x14ac', 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac')
+    sheet_data4 = _get_or_create_child_by_suffix(stage4, 'sheetData')
+    unicode_row = ET.Element(row_tag, attrib={'r': '3', 'spans': '1:3', 'x14ac:dyDescent': '999999'})
+    unicode_row.append(_create_cell(cell_tag, value_tag, 'A3', '0', 'str', '\ufeffUTF8_BOM'))
+    unicode_row.append(_create_cell(cell_tag, value_tag, 'B3', '0', 'str', '\u2066CTRL\u2069'))
+    unicode_row.append(_create_cell(cell_tag, value_tag, 'C3', '0', 'str', '\u202ERTL\u202CTest\u202C'))
+    sheet_data4.append(unicode_row)
+
+    overflow_row = ET.Element(row_tag, attrib={'r': '2147483647', 'spans': '1:2147483647'})
+    overflow_row.append(_create_cell(cell_tag, value_tag, 'A2147483647', '4294967295', 'str', 'overflow_test'))
+    sheet_data4.append(overflow_row)
+
+    for idx in range(_BYPASS_MEMORY_ROWS):
+        r_index = 10 + idx
+        row = ET.Element(row_tag, attrib={'r': str(r_index), 'spans': '1:1'})
+        value = f"payload_{r_index}_{'X' * 32}"
+        row.append(_create_cell(cell_tag, value_tag, f"A{r_index}", '0', 'str', value))
+        sheet_data4.append(row)
+
+    merge_cells4 = _get_or_create_child_by_suffix(stage4, 'mergeCells')
+    merge_cells4.set('count', _EXCEL_LARGE_COUNTS[1])
+    if not list(merge_cells4):
+        merge_cells4.append(ET.Element(_excel_ns(merge_cells4.tag, 'mergeCell'), attrib={'ref': 'A1:A2'}))
+
+    ext_list = _get_or_create_child_by_suffix(stage4, 'extLst')
+    _clear_children(ext_list)
+    ext_tag = _excel_ns(ext_list.tag, 'ext')
+    custom_ext = ET.Element(ext_tag, attrib={'uri': _BYPASS_EXT_URI})
+    custom_data = ET.Element('customData')
+    custom_data.text = _BYPASS_EXT_PAYLOAD
+    custom_ext.append(custom_data)
+    ext_list.append(custom_ext)
+
+    mutations.append(("excel_bypass_stage4", stage4))
+    return mutations
+
+
+def _apply_excel_bypass_mutations(root: ET.Element, maybe_emit) -> bool:
+    mutations = _excel_bypass_mutations(root)
+    for label, mutated_root in mutations:
+        if maybe_emit(mutated_root, label):
+            return True
+    return False
+
+
 def _apply_excel_formula_mutations(root: ET.Element, elements: List[ET.Element], maybe_emit) -> bool:
     for idx, element in enumerate(elements):
         if _local_name(element.tag) != 'f':
@@ -1309,6 +1502,14 @@ def _random_excel_datetime_mutation(root: ET.Element, elements: List[ET.Element]
         return None
     mutated_value.text = rand.select(_excel_datetime_payloads(original_text))
     return mutated_root, "excel_havoc_datetime"
+
+
+def _random_excel_bypass_mutation(root: ET.Element) -> Optional[Tuple[ET.Element, str]]:
+    mutations = _excel_bypass_mutations(root)
+    if not mutations:
+        return None
+    label, mutated_root = rand.select(mutations)
+    return mutated_root, f"{label}_havoc"
 
 
 def _random_excel_formula_mutation(root: ET.Element, elements: List[ET.Element]) -> Optional[Tuple[ET.Element, str]]:
@@ -1761,6 +1962,8 @@ def mutate_seq_xml_structured(payload: bytes, func, xml_info: XMLSeedInfo, max_o
         return
     if _apply_excel_cell_value_mutations(root, elements, maybe_emit):
         return
+    if _apply_excel_bypass_mutations(root, maybe_emit):
+        return
     if _apply_excel_formula_mutations(root, elements, maybe_emit):
         return
     if _apply_excel_row_attribute_mutations(root, elements, maybe_emit):
@@ -1850,7 +2053,7 @@ def mutate_seq_xml_havoc(payload: bytes, func, xml_info: XMLSeedInfo, max_iterat
             _mutate_xml_textual(payload, func, xml_info, 1, label_prefix="xml_havoc_txt")
             return
 
-        choice = rand.int(14)
+        choice = rand.int(15)
         mutated_root: Optional[ET.Element] = None
         label: Optional[str] = None
 
@@ -1922,6 +2125,11 @@ def mutate_seq_xml_havoc(payload: bytes, func, xml_info: XMLSeedInfo, max_iterat
             mutated_root, label = result
         elif choice == 12:
             result = _random_excel_merge_mutation(root)
+            if result is None:
+                continue
+            mutated_root, label = result
+        elif choice == 13:
+            result = _random_excel_bypass_mutation(root)
             if result is None:
                 continue
             mutated_root, label = result
