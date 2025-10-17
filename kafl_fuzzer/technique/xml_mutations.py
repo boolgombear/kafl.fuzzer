@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """XML-specific seed analysis and mutation helpers for kAFL."""
 
@@ -203,7 +203,7 @@ _EXCEL_FORMULA_TEXT_MUTATIONS = (
     "IF(1,REPT(\"A\",32768),0)",
     "_xlfn.LET(x,1E308,x)",
     "GETPIVOTDATA(\"Value\",Sheet1!$A$1)",
-)
+) + _EXCEL_THEMEVAL_FORMULAS
 _EXCEL_FORMULA_REF_MUTATIONS = ("A1", "A1:XFD1048576", "Sheet1!A1", "R1C1", "A0", "XFD1048576")
 _EXCEL_SHARED_INDEX_MUTATIONS = ("0", "1", "1048575", "2147483647", "-1")
 _EXCEL_COLUMN_MIN_MUTATIONS = ("1", "16384", "0", "-1", "2147483647")
@@ -218,6 +218,34 @@ _EXCEL_MERGE_REFS = (
     "A1:XFD1",
     "A1:A1048576",
 )
+_EXCEL_HIGH_RISK_TAGS = (
+    'controls', 'control', 'controlPr', 'dataValidations', 'dataValidation',
+    'formula', 'formula1', 'connections', 'connection', 'HyperlinkBase',
+    'AlternateContent', 'Choice', 'Fallback'
+)
+_EXCEL_HIGH_RISK_ATTRS = (
+    'F', 'progId', 'odcFile', 'name', 'id', 'type', 'sqref', 'allowBlank', 'HyperlinkBase'
+)
+_EXCEL_THEMEVAL_FORMULAS = (
+    "=THEMEVAL()",
+    '=THEMEVAL()+INDIRECT("A1")',
+    '=THEMEVAL()+HYPERLINK("file://C:/")',
+    '=THEMEVAL()+WEBSERVICE("http://attacker")',
+    '=THEMEVAL()+INFO("system")',
+    '=THEMEVAL()+CELL("address")',
+)
+_EXCEL_CONTROL_IDS = (
+    "{00000000-0000-0000-0000-000000000000}",
+    "{F0000000-0000-0000-0000-000000000045}",
+    "{12345678-9ABC-DEF0-1234-56789ABCDEF0}",
+)
+_EXCEL_CONTROL_PROGIDS = (
+    "Forms.CommandButton.1",
+    "Forms.ListBox.1",
+    "Forms.TextBox.1",
+)
+_EXCEL_CONNECTION_IDS = ("1", "2147483647", "4294967295")
+_EXCEL_CONNECTION_NAMES = ("BypassConnection", "PowerQueryImport", "ExternalOLEDB")
 _EXCEL_COMMENT_TEXTS = (
     "Exploit payload " + "X" * 256,
     "Nested comment " + "<tag>" * 32,
@@ -889,6 +917,69 @@ def _excel_structure_mutations(root: ET.Element) -> List[Tuple[str, ET.Element]]
             mutated_filter.attrib['ref'] = ''
         mutations.append(("excel_autofilter_prune", mutated))
 
+    # Data validation mutation.
+    data_validation_containers = _excel_collect_nodes(root, 'dataValidations')
+    mutated = _clone_tree(root)
+    if data_validation_containers:
+        mutated_container = _excel_collect_nodes(mutated, 'dataValidations')[0]
+    else:
+        mutated_container = ET.Element(_excel_ns(mutated.tag, 'dataValidations'), attrib={'count': '0'})
+        mutated.append(mutated_container)
+    _clear_children(mutated_container)
+    mutated_container.set('count', _EXCEL_LARGE_COUNTS[0])
+    dv_tag = _excel_ns(mutated_container.tag, 'dataValidation')
+    formula1_tag = _excel_ns(mutated_container.tag, 'formula1')
+    data_validation = ET.Element(dv_tag, attrib={
+        'type': 'list',
+        'allowBlank': '1',
+        'showErrorMessage': '1',
+        'sqref': 'A1:XFD1048576',
+        'errorStyle': 'stop',
+    })
+    formula1 = ET.Element(formula1_tag)
+    formula1.text = '"THEMEVAL()+INDIRECT("A1")"'
+    data_validation.append(formula1)
+    mutated_container.append(data_validation)
+    mutations.append(("excel_datavalidation_expand", mutated))
+
+    mutated = _clone_tree(root)
+    mutated_container = _excel_collect_nodes(mutated, 'dataValidations')
+    if mutated_container:
+        container = mutated_container[0]
+        _clear_children(container)
+        container.set('count', '0')
+        mutations.append(("excel_datavalidation_clear", mutated))
+
+    # AlternateContent mutation.
+    alt_nodes = _excel_collect_nodes(root, 'AlternateContent')
+    mc_ns = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mutated = _clone_tree(root)
+    if alt_nodes:
+        mutated_alt = _excel_collect_nodes(mutated, 'AlternateContent')[0]
+    else:
+        alt_tag = f"{{{mc_ns}}}AlternateContent"
+        mutated_alt = ET.Element(alt_tag)
+        mutated.append(mutated_alt)
+    _clear_children(mutated_alt)
+    choice = ET.Element(f"{{{mc_ns}}}Choice", attrib={'Requires': 'x14ac'})
+    fallback = ET.Element(f"{{{mc_ns}}}Fallback")
+    choice.append(ET.Element(_excel_ns(mutated.tag, 'controls')))
+    fallback.append(ET.Element(_excel_ns(mutated.tag, 'extLst')))
+    mutated_alt.append(choice)
+    mutated_alt.append(fallback)
+    mutations.append(("excel_alternatecontent_inject", mutated))
+
+    mutated = _clone_tree(root)
+    mutated_alt_nodes = _excel_collect_nodes(mutated, 'AlternateContent')
+    if mutated_alt_nodes:
+        _clear_children(mutated_alt_nodes[0])
+        mutations.append(("excel_alternatecontent_clear", mutated))
+
+    # HyperlinkBase attribute mutation.
+    mutated = _clone_tree(root)
+    mutated.attrib['HyperlinkBase'] = 'http://bypass.attacker.local/'
+    mutations.append(("excel_hyperlink_base", mutated))
+
     # Hyperlinks mutation.
     hyperlink_nodes = _excel_collect_nodes(root, 'hyperlinks')
     if hyperlink_nodes:
@@ -1094,6 +1185,21 @@ def _apply_excel_cell_attribute_mutations(root: ET.Element, elements: List[ET.El
                 value_child = _ensure_child_by_suffix(mutated_cell, 'v')
                 value_child.text = new_value
             if maybe_emit(mutated_root, "excel_attr_type"):
+                return True
+        original_formula_attr = element.attrib.get('F')
+        for theme_formula in _EXCEL_THEMEVAL_FORMULAS:
+            if theme_formula == original_formula_attr:
+                continue
+            mutated_root = _clone_tree(root)
+            mutated_cell = _iter_elements(mutated_root)[idx]
+            mutated_cell.attrib['F'] = theme_formula
+            if maybe_emit(mutated_root, "excel_attr_themeval"):
+                return True
+        if original_formula_attr is not None:
+            mutated_root = _clone_tree(root)
+            mutated_cell = _iter_elements(mutated_root)[idx]
+            mutated_cell.attrib.pop('F', None)
+            if maybe_emit(mutated_root, "excel_attr_themeval_clear"):
                 return True
     return False
 
@@ -1446,6 +1552,83 @@ def _apply_excel_merge_mutations(root: ET.Element, maybe_emit) -> bool:
     return False
 
 
+def _apply_excel_control_mutations(root: ET.Element, maybe_emit) -> bool:
+    controls_nodes = _excel_collect_nodes(root, 'controls')
+    mutated_root = _clone_tree(root)
+    if controls_nodes:
+        mutated_controls = _excel_collect_nodes(mutated_root, 'controls')[0]
+    else:
+        controls_tag = _excel_ns(mutated_root.tag, 'controls')
+        mutated_controls = ET.Element(controls_tag)
+        mutated_root.append(mutated_controls)
+    control_tag = _excel_ns(mutated_controls.tag, 'control')
+    control_pr_tag = _excel_ns(mutated_controls.tag, 'controlPr')
+    control = ET.Element(control_tag, attrib={
+        'shapeId': '1024',
+        'r:id': _EXCEL_DRAWING_REL_IDS[2],
+        'progId': _EXCEL_CONTROL_PROGIDS[0],
+        'id': _EXCEL_CONTROL_IDS[0],
+    })
+    control_pr = ET.Element(control_pr_tag, attrib={
+        'autoFill': 'false',
+        'autoLine': 'false',
+        'lockedText': 'false',
+    })
+    control.append(control_pr)
+    mutated_controls.append(control)
+    if maybe_emit(mutated_root, "excel_controls_inject"):
+        return True
+
+    mutated_root = _clone_tree(root)
+    mutated_controls = _excel_collect_nodes(mutated_root, 'controls')
+    if mutated_controls:
+        parent = mutated_controls[0]
+        _clear_children(parent)
+        if maybe_emit(mutated_root, "excel_controls_clear"):
+            return True
+    return False
+
+
+def _apply_excel_connection_mutations(root: ET.Element, maybe_emit) -> bool:
+    connections_nodes = _excel_collect_nodes(root, 'connections')
+    mutated_root = _clone_tree(root)
+    if connections_nodes:
+        mutated_connections = _excel_collect_nodes(mutated_root, 'connections')[0]
+    else:
+        mutated_connections = ET.Element(_excel_ns(mutated_root.tag, 'connections'))
+        mutated_root.append(mutated_connections)
+    connection_tag = _excel_ns(mutated_connections.tag, 'connection')
+    db_tag = _excel_ns(mutated_connections.tag, 'dbPr')
+    connection = ET.Element(connection_tag, attrib={
+        'id': _EXCEL_CONNECTION_IDS[0],
+        'name': _EXCEL_CONNECTION_NAMES[0],
+        'type': '1',
+        'odcFile': 'file://C:/Users/Public/Documents/bypass.odc',
+        'keepAlive': '1',
+        'interval': '0',
+    })
+    db_pr = ET.Element(db_tag, attrib={
+        'connection': _EXCEL_CONNECTION_STRINGS[0],
+        'command': 'SELECT * FROM BypassTable',
+        'commandType': 'Table',
+    })
+    connection.append(db_pr)
+    mutated_connections.append(connection)
+    mutated_connections.attrib['count'] = str(len(list(mutated_connections)))
+    if maybe_emit(mutated_root, "excel_connections_bypass"):
+        return True
+
+    mutated_root = _clone_tree(root)
+    mutated_connections = _excel_collect_nodes(mutated_root, 'connections')
+    if mutated_connections:
+        parent = mutated_connections[0]
+        _clear_children(parent)
+        parent.attrib['count'] = '0'
+        if maybe_emit(mutated_root, "excel_connections_clear"):
+            return True
+    return False
+
+
 def _apply_excel_reference_structure_mutations(root: ET.Element, maybe_emit) -> bool:
     for label_suffix, mutated_root in _excel_reference_mutations(root):
         if maybe_emit(mutated_root, label_suffix):
@@ -1599,6 +1782,59 @@ def _random_excel_merge_mutation(root: ET.Element) -> Optional[Tuple[ET.Element,
     return mutated_root, label
 
 
+def _random_excel_control_mutation(root: ET.Element) -> Optional[Tuple[ET.Element, str]]:
+    controls_nodes = _excel_collect_nodes(root, 'controls')
+    mutated_root = _clone_tree(root)
+    if controls_nodes:
+        mutated_controls = _excel_collect_nodes(mutated_root, 'controls')[0]
+    else:
+        controls_tag = _excel_ns(mutated_root.tag, 'controls')
+        mutated_controls = ET.Element(controls_tag)
+        mutated_root.append(mutated_controls)
+    control_tag = _excel_ns(mutated_controls.tag, 'control')
+    control_pr_tag = _excel_ns(mutated_controls.tag, 'controlPr')
+    control = ET.Element(control_tag, attrib={
+        'shapeId': str(1024 + rand.int(1024)),
+        'r:id': rand.select(_EXCEL_DRAWING_REL_IDS),
+        'progId': rand.select(_EXCEL_CONTROL_PROGIDS),
+        'id': rand.select(_EXCEL_CONTROL_IDS),
+    })
+    control_pr = ET.Element(control_pr_tag, attrib={
+        'autoFill': rand.select(('true', 'false')),
+        'autoLine': rand.select(('true', 'false')),
+        'locked': rand.select(('0', '1')),
+    })
+    control.append(control_pr)
+    mutated_controls.append(control)
+    return mutated_root, "excel_havoc_controls"
+
+
+def _random_excel_connection_mutation(root: ET.Element) -> Optional[Tuple[ET.Element, str]]:
+    connections_nodes = _excel_collect_nodes(root, 'connections')
+    mutated_root = _clone_tree(root)
+    if connections_nodes:
+        mutated_connections = _excel_collect_nodes(mutated_root, 'connections')[0]
+    else:
+        mutated_connections = ET.Element(_excel_ns(mutated_root.tag, 'connections'))
+        mutated_root.append(mutated_connections)
+    connection_tag = _excel_ns(mutated_connections.tag, 'connection')
+    db_tag = _excel_ns(mutated_connections.tag, 'dbPr')
+    connection = ET.Element(connection_tag, attrib={
+        'id': rand.select(_EXCEL_CONNECTION_IDS),
+        'name': rand.select(_EXCEL_CONNECTION_NAMES),
+        'type': rand.select(('1', '2', '5')),
+        'odcFile': 'file://C:/Bypass/connection.odc',
+    })
+    db_pr = ET.Element(db_tag, attrib={
+        'connection': rand.select(_EXCEL_CONNECTION_STRINGS),
+        'command': 'SELECT * FROM Sheet1',
+        'commandType': rand.select(('Cube', 'Table', 'Default')),
+    })
+    connection.append(db_pr)
+    mutated_connections.append(connection)
+    return mutated_root, "excel_havoc_connections"
+
+
 def _random_excel_cell_attribute_mutation(root: ET.Element, elements: List[ET.Element]) -> Optional[Tuple[ET.Element, str]]:
     candidates = [idx for idx, element in enumerate(elements) if _is_excel_cell(element)]
     if not candidates:
@@ -1607,7 +1843,7 @@ def _random_excel_cell_attribute_mutation(root: ET.Element, elements: List[ET.El
     mutated_root = _clone_tree(root)
     mutated_cell = _iter_elements(mutated_root)[target_idx]
 
-    choice = rand.int(3)
+    choice = rand.int(4)
     if choice == 0:
         new_ref = rand.select(_EXCEL_CELL_REFERENCE_MUTATIONS)
         mutated_cell.attrib['r'] = new_ref
@@ -1619,7 +1855,7 @@ def _random_excel_cell_attribute_mutation(root: ET.Element, elements: List[ET.El
         elif 's' in mutated_cell.attrib:
             del mutated_cell.attrib['s']
         label = "excel_havoc_attr_style"
-    else:
+    elif choice == 2:
         new_type, new_value = rand.select(_EXCEL_CELL_TYPE_MUTATIONS)
         mutated_cell.attrib['t'] = new_type
         if new_type == "inlineStr":
@@ -1634,6 +1870,9 @@ def _random_excel_cell_attribute_mutation(root: ET.Element, elements: List[ET.El
             value_child = _ensure_child_by_suffix(mutated_cell, 'v')
             value_child.text = new_value
         label = "excel_havoc_attr_type"
+    else:
+        mutated_cell.attrib['F'] = rand.select(_EXCEL_THEMEVAL_FORMULAS)
+        label = "excel_havoc_attr_themeval"
     return mutated_root, label
 
 
@@ -1771,6 +2010,8 @@ def _build_candidate_lists(xml_info: XMLSeedInfo):
     attrs.update(_GLOBAL_SCHEMA['attributes'])
     attr_values.update(_GLOBAL_SCHEMA['attribute_values'])
     text_tokens.extend(list(_GLOBAL_SCHEMA['texts']))
+    tags.update(_EXCEL_HIGH_RISK_TAGS)
+    attrs.update(_EXCEL_HIGH_RISK_ATTRS)
 
     if any(tag.startswith(('w:', 'wp:', 'a:', 'v:')) for tag in tags):
         tags.update(_OOXML_TAG_CANDIDATES)
@@ -1964,6 +2205,10 @@ def mutate_seq_xml_structured(payload: bytes, func, xml_info: XMLSeedInfo, max_o
         return
     if _apply_excel_bypass_mutations(root, maybe_emit):
         return
+    if _apply_excel_control_mutations(root, maybe_emit):
+        return
+    if _apply_excel_connection_mutations(root, maybe_emit):
+        return
     if _apply_excel_formula_mutations(root, elements, maybe_emit):
         return
     if _apply_excel_row_attribute_mutations(root, elements, maybe_emit):
@@ -2053,7 +2298,7 @@ def mutate_seq_xml_havoc(payload: bytes, func, xml_info: XMLSeedInfo, max_iterat
             _mutate_xml_textual(payload, func, xml_info, 1, label_prefix="xml_havoc_txt")
             return
 
-        choice = rand.int(15)
+        choice = rand.int(17)
         mutated_root: Optional[ET.Element] = None
         label: Optional[str] = None
 
@@ -2130,6 +2375,16 @@ def mutate_seq_xml_havoc(payload: bytes, func, xml_info: XMLSeedInfo, max_iterat
             mutated_root, label = result
         elif choice == 13:
             result = _random_excel_bypass_mutation(root)
+            if result is None:
+                continue
+            mutated_root, label = result
+        elif choice == 14:
+            result = _random_excel_control_mutation(root)
+            if result is None:
+                continue
+            mutated_root, label = result
+        elif choice == 15:
+            result = _random_excel_connection_mutation(root)
             if result is None:
                 continue
             mutated_root, label = result
