@@ -151,6 +151,14 @@ _EXCEL_CELL_TYPE_MUTATIONS = (
 )
 _EXCEL_CELL_STYLE_MUTATIONS = ("", "0", "1", "64", "99", "4096", "16384", "4294967295", "-1")
 _EXCEL_ROW_REFERENCE_MUTATIONS = ("0", "1", "1048576", "1048577", "999999", "-1")
+_EXCEL_LARGE_COUNTS = ("2147483647", "4294967295", "1099511627776")
+_EXCEL_JSON_PAYLOAD = '{"type":"PowerQuery","data":"' + ('A' * 1024) + '"}'
+_EXCEL_MASHUP_PAYLOAD = '{"Mashup":{"Queries":[' + ','.join('"Q{}"'.format(i) for i in range(10)) + '],"Binary":"' + ('B' * 512) + '"}}'
+_EXCEL_CONNECTION_STRINGS = (
+    "Provider=SQLOLEDB;Data Source=\\\\\\evil\\share;Initial Catalog=Finance;Integrated Security=SSPI;",
+    "Driver={SQL Server};Server=localhost;Trusted_Connection=yes;Packet Size=32768;Application Intent=READONLY;",
+    "OLEDB;Data Source=|DataDirectory|\\payload.db;Persist Security Info=True;Password=secret;",
+)
 
 
 @dataclass
@@ -361,6 +369,11 @@ def _excel_collect_nodes(root: ET.Element, suffix: str) -> List[ET.Element]:
     return [node for node in root.iter() if node.tag.endswith(suffix)]
 
 
+def _excel_collect_nodes_by_suffixes(root: ET.Element, suffixes: Sequence[str]) -> List[ET.Element]:
+    suffix_tuple = tuple(suffixes)
+    return [node for node in root.iter() if node.tag.endswith(suffix_tuple)]
+
+
 def _excel_column_name(index: int) -> str:
     if index < 0:
         return "A"
@@ -479,6 +492,130 @@ def _excel_reference_mutations(root: ET.Element) -> List[Tuple[str, ET.Element]]
         sparse_row.append(sparse_cell)
     mutated_sheet.append(sparse_row)
     mutations.append(("excel_sparse_row", mutated))
+
+    return mutations
+
+
+def _excel_structure_mutations(root: ET.Element) -> List[Tuple[str, ET.Element]]:
+    mutations: List[Tuple[str, ET.Element]] = []
+
+    # Shared string table mutations.
+    sst_nodes = _excel_collect_nodes(root, 'sst')
+    if sst_nodes:
+        mutated = _clone_tree(root)
+        mutated_sst = _excel_collect_nodes(mutated, 'sst')[0]
+        mutated_sst.set('count', _EXCEL_LARGE_COUNTS[0])
+        mutated_sst.set('uniqueCount', _EXCEL_LARGE_COUNTS[-1])
+        mutations.append(("excel_sst_count", mutated))
+
+        mutated = _clone_tree(root)
+        mutated_sst = _excel_collect_nodes(mutated, 'sst')[0]
+        new_si = ET.Element(_excel_ns(mutated_sst.tag, 'si'))
+        new_text = ET.Element(_excel_ns(mutated_sst.tag, 't'))
+        new_text.text = _EXCEL_JSON_PAYLOAD
+        new_si.append(new_text)
+        mutated_sst.append(new_si)
+        mutations.append(("excel_sst_inflate", mutated))
+
+        mutated = _clone_tree(root)
+        mutated_sst = _excel_collect_nodes(mutated, 'sst')[0]
+        mutated_sst.clear()
+        mutated_sst.set('count', '0')
+        mutated_sst.set('uniqueCount', _EXCEL_LARGE_COUNTS[1])
+        mutations.append(("excel_sst_truncate", mutated))
+
+    # Styles/styleSheet mutations.
+    styles_nodes = _excel_collect_nodes_by_suffixes(root, ('styleSheet', 'styles'))
+    if styles_nodes:
+        mutated = _clone_tree(root)
+        mutated_styles = _excel_collect_nodes_by_suffixes(mutated, ('styleSheet', 'styles'))[0]
+        for child in mutated_styles:
+            if 'count' in child.attrib:
+                child.attrib['count'] = _EXCEL_LARGE_COUNTS[0]
+        cell_xfs = ET.Element(_excel_ns(mutated_styles.tag, 'cellXfs'), attrib={'count': _EXCEL_LARGE_COUNTS[1]})
+        for _ in range(3):
+            xf = ET.Element(_excel_ns(mutated_styles.tag, 'xf'), attrib={
+                'numFmtId': '0',
+                'fontId': '0',
+                'fillId': '0',
+                'borderId': '0',
+                'xfId': '0',
+                'applyAlignment': '1',
+                'applyProtection': '1',
+            })
+            cell_xfs.append(xf)
+        mutated_styles.append(cell_xfs)
+        mutations.append(("excel_styles_expand", mutated))
+
+        mutated = _clone_tree(root)
+        mutated_styles = _excel_collect_nodes_by_suffixes(mutated, ('styleSheet', 'styles'))[0]
+        to_remove = [child for child in mutated_styles if child.tag.endswith(('cellStyleXfs', 'cellXfs', 'dxfs'))]
+        for child in to_remove:
+            mutated_styles.remove(child)
+        mutations.append(("excel_styles_prune", mutated))
+
+    # Pivot cache definition mutation.
+    pivot_nodes = _excel_collect_nodes(root, 'pivotCacheDefinition')
+    if pivot_nodes:
+        mutated = _clone_tree(root)
+        mutated_pivot = _excel_collect_nodes(mutated, 'pivotCacheDefinition')[0]
+        mutated_pivot.set('recordCount', _EXCEL_LARGE_COUNTS[0])
+        mutated_pivot.set('refreshOnLoad', '1')
+        mutated_pivot.set('enableRefresh', '1')
+        cache_field = ET.Element(_excel_ns(mutated_pivot.tag, 'cacheField'), attrib={'name': '__MUT_PIVOT__', 'numFmtId': '0'})
+        shared_items = ET.Element(_excel_ns(mutated_pivot.tag, 'sharedItems'), attrib={'count': _EXCEL_LARGE_COUNTS[1]})
+        for idx in range(8):
+            s_item = ET.Element(_excel_ns(mutated_pivot.tag, 's'))
+            s_item.text = f"Pivot_{idx:04d}_{'X' * 64}"
+            shared_items.append(s_item)
+        cache_field.append(shared_items)
+        mutated_pivot.append(cache_field)
+        mutations.append(("excel_pivot_expand", mutated))
+
+    # Extension list mutation.
+    extlst_nodes = _excel_collect_nodes(root, 'extLst')
+    if extlst_nodes:
+        mutated = _clone_tree(root)
+        mutated_ext = _excel_collect_nodes(mutated, 'extLst')[0]
+        ext = ET.Element(_excel_ns(mutated_ext.tag, 'ext'), attrib={'uri': 'urn:schemas-microsoft-com:office:excel:calcChain#' + 'A' * 32})
+        ext.text = _EXCEL_MASHUP_PAYLOAD
+        mutated_ext.append(ext)
+        mutations.append(("excel_extlst_payload", mutated))
+
+        mutated = _clone_tree(root)
+        mutated_ext = _excel_collect_nodes(mutated, 'extLst')[0]
+        for child in list(mutated_ext):
+            mutated_ext.remove(child)
+        mutations.append(("excel_extlst_remove", mutated))
+
+    # Connections mutation.
+    connections_nodes = _excel_collect_nodes(root, 'connections')
+    if connections_nodes:
+        mutated = _clone_tree(root)
+        mutated_conn = _excel_collect_nodes(mutated, 'connections')[0]
+        connection = ET.Element(_excel_ns(mutated_conn.tag, 'connection'), attrib={
+            'id': _EXCEL_LARGE_COUNTS[0],
+            'odcFile': 'file://../../../../etc/passwd',
+            'keepAlive': '1',
+            'type': '10',
+        })
+        db_pr = ET.Element(_excel_ns(mutated_conn.tag, 'dbPr'), attrib={'connection': rand.select(_EXCEL_CONNECTION_STRINGS)})
+        oledb_pr = ET.Element(_excel_ns(mutated_conn.tag, 'oledbPr'), attrib={'commandType': 'Table', 'command': 'SELECT * FROM Sheet1'})
+        connection.extend([db_pr, oledb_pr])
+        mutated_conn.append(connection)
+        mutations.append(("excel_connections_inject", mutated))
+
+    # Revisions mutation.
+    revisions_nodes = _excel_collect_nodes(root, 'revisions')
+    if revisions_nodes:
+        mutated = _clone_tree(root)
+        mutated_rev = _excel_collect_nodes(mutated, 'revisions')[0]
+        rrc = ET.Element(_excel_ns(mutated_rev.tag, 'rrc'), attrib={'rId': '-1', 'sheetId': _EXCEL_LARGE_COUNTS[0]})
+        action = ET.Element(_excel_ns(mutated_rev.tag, 'action'), attrib={'type': 'unknown'})
+        action.text = "corrupt"
+        rrc.append(action)
+        mutated_rev.append(rrc)
+        mutations.append(("excel_revisions_inject", mutated))
 
     return mutations
 
@@ -627,6 +764,13 @@ def _apply_excel_reference_structure_mutations(root: ET.Element, maybe_emit) -> 
     return False
 
 
+def _apply_excel_structure_mutations(root: ET.Element, maybe_emit) -> bool:
+    for label_suffix, mutated_root in _excel_structure_mutations(root):
+        if maybe_emit(mutated_root, label_suffix):
+            return True
+    return False
+
+
 def _random_excel_cell_mutation(root: ET.Element, elements: List[ET.Element]) -> Optional[Tuple[ET.Element, str]]:
     candidate_indices = []
     for idx, element in enumerate(elements):
@@ -673,6 +817,14 @@ def _random_excel_datetime_mutation(root: ET.Element, elements: List[ET.Element]
 
 def _random_excel_reference_mutation(root: ET.Element) -> Optional[Tuple[ET.Element, str]]:
     mutations = _excel_reference_mutations(root)
+    if not mutations:
+        return None
+    label, mutated_root = rand.select(mutations)
+    return mutated_root, f"{label}_havoc"
+
+
+def _random_excel_structure_mutation(root: ET.Element) -> Optional[Tuple[ET.Element, str]]:
+    mutations = _excel_structure_mutations(root)
     if not mutations:
         return None
     label, mutated_root = rand.select(mutations)
@@ -1043,6 +1195,8 @@ def mutate_seq_xml_structured(payload: bytes, func, xml_info: XMLSeedInfo, max_o
         return
     if _apply_excel_reference_structure_mutations(root, maybe_emit):
         return
+    if _apply_excel_structure_mutations(root, maybe_emit):
+        return
 
     # Tag renaming
     for idx, element in enumerate(elements):
@@ -1118,7 +1272,7 @@ def mutate_seq_xml_havoc(payload: bytes, func, xml_info: XMLSeedInfo, max_iterat
             _mutate_xml_textual(payload, func, xml_info, 1, label_prefix="xml_havoc_txt")
             return
 
-        choice = rand.int(10)
+        choice = rand.int(11)
         mutated_root: Optional[ET.Element] = None
         label: Optional[str] = None
 
@@ -1173,8 +1327,13 @@ def mutate_seq_xml_havoc(payload: bytes, func, xml_info: XMLSeedInfo, max_iterat
             if result is None:
                 continue
             mutated_root, label = result
-        else:
+        elif choice == 9:
             result = _random_excel_reference_mutation(root)
+            if result is None:
+                continue
+            mutated_root, label = result
+        else:
+            result = _random_excel_structure_mutation(root)
             if result is None:
                 continue
             mutated_root, label = result
