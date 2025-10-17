@@ -137,6 +137,10 @@ _EXCEL_CELL_REFERENCE_MUTATIONS = (
     "A0",
     "A1048577",
     "XFE1",
+    "B0",
+    "C-1",
+    "D999999999",
+    "I2147483647",
 )
 _EXCEL_CELL_TYPE_MUTATIONS = (
     ("n", "TEXT_MISMATCH"),
@@ -148,9 +152,13 @@ _EXCEL_CELL_TYPE_MUTATIONS = (
     ("e", "#VALUE!"),
     ("d", "9999-12-31T23:59:59.999999999Z"),
     ("datetime", "9999-12-31T99:99:99Z"),
+    ("N", "0"),
+    ("STR", "invalid"),
+    ("", ""),
 )
-_EXCEL_CELL_STYLE_MUTATIONS = ("", "0", "1", "64", "99", "4096", "16384", "4294967295", "-1")
-_EXCEL_ROW_REFERENCE_MUTATIONS = ("0", "1", "1048576", "1048577", "999999", "-1")
+_EXCEL_CELL_STYLE_MUTATIONS = ("", "0", "1", "64", "99", "4096", "16384", "4294967295", "-1", "2147483647")
+_EXCEL_ROW_REFERENCE_MUTATIONS = ("0", "1", "1048576", "1048577", "999999", "-1", "2147483647")
+_EXCEL_ROW_SPAN_MUTATIONS = ("1:16384", "0:0", "-1:-1", "1:1048576", "16384:16384", "1048576:1048576", "2:16385", "9:2")
 _EXCEL_LARGE_COUNTS = ("2147483647", "4294967295", "1099511627776")
 _EXCEL_JSON_PAYLOAD = '{"type":"PowerQuery","data":"' + ('A' * 1024) + '"}'
 _EXCEL_MASHUP_PAYLOAD = '{"Mashup":{"Queries":[' + ','.join('"Q{}"'.format(i) for i in range(10)) + '],"Binary":"' + ('B' * 512) + '"}}'
@@ -158,6 +166,112 @@ _EXCEL_CONNECTION_STRINGS = (
     "Provider=SQLOLEDB;Data Source=\\\\\\evil\\share;Initial Catalog=Finance;Integrated Security=SSPI;",
     "Driver={SQL Server};Server=localhost;Trusted_Connection=yes;Packet Size=32768;Application Intent=READONLY;",
     "OLEDB;Data Source=|DataDirectory|\\payload.db;Persist Security Info=True;Password=secret;",
+)
+_EXCEL_TABLE_REF_MUTATIONS = (
+    "A1:XFD1048576",
+    "A0:A0",
+    "IV65536:XFD1048576",
+    "A1048576:B1048577",
+    "A1:A1048576",
+)
+_EXCEL_TABLE_STYLE_FLAGS = ("showFirstColumn", "showLastColumn", "showRowStripes", "showColumnStripes", "showAutoFilter")
+_EXCEL_CF_TYPES = (
+    ("dataBar", {"priority": _EXCEL_LARGE_COUNTS[0], "id": "-1"}),
+    ("colorScale", {"priority": "1", "id": "0"}),
+    ("iconSet", {"priority": "2", "id": "1"}),
+)
+_EXCEL_HYPERLINK_TARGETS = (
+    "http://127.0.0.1:31337/" + "A" * 128,
+    "file:///C:/Windows/System32/calc.exe",
+    "file://\\\\\\\\corpserver\\\\share\\\\payload.xlsm",
+    "mailto:\"attacker\"@example.com?subject=ExcelTest",
+)
+_EXCEL_HYPERLINK_LOCATIONS = (
+    "Sheet999!A1048576",
+    "HiddenSheet!IV65536",
+    "ExternalWorkbook.xlsx!Sheet1!A1",
+)
+_EXCEL_HYPERLINK_UIDS = (
+    "{00000000-0000-0000-0000-000000000000}",
+    "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}",
+    "{12345678-1234-5678-1234-567812345678}",
+)
+_EXCEL_FORMULA_TYPES = ("normal", "shared", "array", "dataTable", "reference", "", "invalid")
+_EXCEL_FORMULA_TEXT_MUTATIONS = (
+    "SUM(A1:A1048576)",
+    "OFFSET($A$1,1048575,16383)",
+    "IF(1,REPT(\"A\",32768),0)",
+    "_xlfn.LET(x,1E308,x)",
+    "GETPIVOTDATA(\"Value\",Sheet1!$A$1)",
+)
+_EXCEL_FORMULA_REF_MUTATIONS = ("A1", "A1:XFD1048576", "Sheet1!A1", "R1C1", "A0", "XFD1048576")
+_EXCEL_SHARED_INDEX_MUTATIONS = ("0", "1", "1048575", "2147483647", "-1")
+_EXCEL_COLUMN_MIN_MUTATIONS = ("1", "16384", "0", "-1", "2147483647")
+_EXCEL_COLUMN_MAX_MUTATIONS = ("1", "16384", "0", "-1", "2147483647", "4294967295")
+_EXCEL_COLUMN_WIDTH_MUTATIONS = ("0", "0.1", "255", "1024", "-1", "1.7976931348623157E+308")
+_EXCEL_COLUMN_STYLE_MUTATIONS = ("0", "1", "999999", "4294967295", "-1")
+_EXCEL_MERGE_REFS = (
+    "A1:B1048576",
+    "IV1:XFD1048576",
+    "A0:B0",
+    "A1048576:A1048576",
+    "A1:XFD1",
+    "A1:A1048576",
+)
+_EXCEL_COMMENT_TEXTS = (
+    "Exploit payload " + "X" * 256,
+    "Nested comment " + "<tag>" * 32,
+    "A" * 512,
+)
+_EXCEL_AUTHOR_NAMES = (
+    "MegaResearcher",
+    "ThreadedActor",
+    "PowerHyperMorph",
+)
+_EXCEL_THREAD_IDS = (
+    "{00000000-0000-0000-0000-000000000001}",
+    "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}",
+    "{12345678-90AB-CDEF-1234-567890ABCDEF}",
+)
+_EXCEL_SPARKLINE_RANGES = (
+    "Sheet1!A1:XFD1",
+    "Sheet2!A1:A1048576",
+    "Hidden!IV1:IV1048576",
+)
+_EXCEL_DRAWING_REL_IDS = (
+    "rId999999",
+    "rId2147483647",
+    "rId4294967295",
+)
+_EXCEL_HYPERLINK_LOCATIONS = (
+    "Sheet999!A1048576",
+    "HiddenSheet!IV65536",
+    "ExternalWorkbook.xlsx!Sheet1!A1",
+)
+_EXCEL_COMMENT_TEXTS = (
+    "Exploit payload " + "X" * 256,
+    "Nested comment " + "<tag>" * 32,
+    "A" * 512,
+)
+_EXCEL_AUTHOR_NAMES = (
+    "MegaResearcher",
+    "ThreadedActor",
+    "PowerHyperMorph",
+)
+_EXCEL_THREAD_IDS = (
+    "{00000000-0000-0000-0000-000000000001}",
+    "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}",
+    "{12345678-90AB-CDEF-1234-567890ABCDEF}",
+)
+_EXCEL_SPARKLINE_RANGES = (
+    "Sheet1!A1:XFD1",
+    "Sheet2!A1:A1048576",
+    "Hidden!IV1:IV1048576",
+)
+_EXCEL_DRAWING_REL_IDS = (
+    "rId999999",
+    "rId2147483647",
+    "rId4294967295",
 )
 
 
@@ -297,6 +411,12 @@ def _clone_tree(root: ET.Element) -> ET.Element:
 
 def _element_to_bytes(root: ET.Element) -> bytes:
     return ET.tostring(root, encoding="utf-8")
+
+
+def _local_name(tag: str) -> str:
+    if '}' in tag:
+        return tag.rsplit('}', 1)[-1]
+    return tag
 
 
 def _excel_ns(reference_tag: str, local_name: str) -> str:
@@ -599,7 +719,7 @@ def _excel_structure_mutations(root: ET.Element) -> List[Tuple[str, ET.Element]]
             'keepAlive': '1',
             'type': '10',
         })
-        db_pr = ET.Element(_excel_ns(mutated_conn.tag, 'dbPr'), attrib={'connection': rand.select(_EXCEL_CONNECTION_STRINGS)})
+        db_pr = ET.Element(_excel_ns(mutated_conn.tag, 'dbPr'), attrib={'connection': _EXCEL_CONNECTION_STRINGS[0]})
         oledb_pr = ET.Element(_excel_ns(mutated_conn.tag, 'oledbPr'), attrib={'commandType': 'Table', 'command': 'SELECT * FROM Sheet1'})
         connection.extend([db_pr, oledb_pr])
         mutated_conn.append(connection)
@@ -616,6 +736,245 @@ def _excel_structure_mutations(root: ET.Element) -> List[Tuple[str, ET.Element]]
         rrc.append(action)
         mutated_rev.append(rrc)
         mutations.append(("excel_revisions_inject", mutated))
+
+    # Table structures mutation.
+    table_nodes = _excel_collect_nodes(root, 'table')
+    if table_nodes:
+        mutated = _clone_tree(root)
+        mutated_table = _excel_collect_nodes(mutated, 'table')[0]
+        mutated_table.set('ref', _EXCEL_TABLE_REF_MUTATIONS[0])
+        mutated_table.set('headerRowCount', _EXCEL_LARGE_COUNTS[0])
+        mutated_table.set('totalsRowCount', _EXCEL_LARGE_COUNTS[0])
+        mutated_table.set('tableType', 'worksheet')
+        table_columns = _ensure_child_by_suffix(mutated_table, 'tableColumns')
+        table_columns.attrib['count'] = _EXCEL_LARGE_COUNTS[1]
+        for idx in range(32):
+            column = ET.Element(_excel_ns(mutated_table.tag, 'tableColumn'), attrib={
+                'id': str(1000 + idx),
+                'name': f"Column_{idx:04d}_{'X' * 8}"
+            })
+            table_columns.append(column)
+        style_info = _ensure_child_by_suffix(mutated_table, 'tableStyleInfo')
+        style_info.attrib['name'] = 'TableStyleMedium2'
+        for flag in _EXCEL_TABLE_STYLE_FLAGS:
+            style_info.attrib[flag] = '1'
+        mutations.append(("excel_table_expand", mutated))
+
+        mutated = _clone_tree(root)
+        mutated_table = _excel_collect_nodes(mutated, 'table')[0]
+        style_info = _find_child_by_suffix(mutated_table, 'tableStyleInfo')
+        if style_info is not None:
+            mutated_table.remove(style_info)
+        table_columns = _find_child_by_suffix(mutated_table, 'tableColumns')
+        if table_columns is not None:
+            for child in list(table_columns)[3:]:
+                table_columns.remove(child)
+            table_columns.attrib['count'] = '3'
+        mutations.append(("excel_table_prune", mutated))
+
+    table_parts_nodes = _excel_collect_nodes(root, 'tableParts')
+    if table_parts_nodes:
+        mutated = _clone_tree(root)
+        mutated_parts = _excel_collect_nodes(mutated, 'tableParts')[0]
+        mutated_parts.set('count', _EXCEL_LARGE_COUNTS[0])
+        new_part = ET.Element(_excel_ns(mutated_parts.tag, 'tablePart'), attrib={'r:id': f"rId{_EXCEL_LARGE_COUNTS[1]}"})
+        mutated_parts.append(new_part)
+        mutations.append(("excel_tableparts_expand", mutated))
+
+        mutated = _clone_tree(root)
+        mutated_parts = _excel_collect_nodes(mutated, 'tableParts')[0]
+        for child in list(mutated_parts)[1:]:
+            mutated_parts.remove(child)
+        if 'count' in mutated_parts.attrib:
+            mutated_parts.attrib['count'] = '0'
+        mutations.append(("excel_tableparts_prune", mutated))
+
+    # Conditional formatting mutation.
+    cf_nodes = _excel_collect_nodes(root, 'conditionalFormatting')
+    if cf_nodes:
+        mutated = _clone_tree(root)
+        mutated_cf = _excel_collect_nodes(mutated, 'conditionalFormatting')[0]
+        mutated_cf.set('sqref', 'A1:XFD1048576')
+        mutated_cf.set('pivot', '1')
+        for cf_type, extra_attrs in _EXCEL_CF_TYPES:
+            cf_rule = ET.Element(_excel_ns(mutated_cf.tag, 'cfRule'), attrib={'type': cf_type, **extra_attrs})
+            if cf_type == 'dataBar':
+                data_bar = ET.Element(_excel_ns(mutated_cf.tag, 'dataBar'))
+                data_bar.append(ET.Element(_excel_ns(mutated_cf.tag, 'cfvo'), attrib={'type': 'num', 'val': '-999999999'}))
+                data_bar.append(ET.Element(_excel_ns(mutated_cf.tag, 'cfvo'), attrib={'type': 'num', 'val': '999999999'}))
+                data_bar.append(ET.Element(_excel_ns(mutated_cf.tag, 'color'), attrib={'rgb': 'FFFF0000'}))
+                cf_rule.append(data_bar)
+            elif cf_type == 'colorScale':
+                color_scale = ET.Element(_excel_ns(mutated_cf.tag, 'colorScale'))
+                for val in ('-1', '0', '1'):
+                    color_scale.append(ET.Element(_excel_ns(mutated_cf.tag, 'cfvo'), attrib={'type': 'num', 'val': val}))
+                for rgb in ('FF00FF00', 'FFFFFF00', 'FFFF0000'):
+                    color_scale.append(ET.Element(_excel_ns(mutated_cf.tag, 'color'), attrib={'rgb': rgb}))
+                cf_rule.append(color_scale)
+            else:
+                icon_set = ET.Element(_excel_ns(mutated_cf.tag, 'iconSet'), attrib={'iconSet': '4TrafficLights', 'showValue': '0'})
+                cf_rule.append(icon_set)
+            mutated_cf.append(cf_rule)
+        mutations.append(("excel_conditional_expand", mutated))
+
+        mutated = _clone_tree(root)
+        mutated_cf = _excel_collect_nodes(mutated, 'conditionalFormatting')[0]
+        for child in list(mutated_cf):
+            mutated_cf.remove(child)
+        if 'sqref' in mutated_cf.attrib:
+            mutated_cf.attrib['sqref'] = ''
+        mutations.append(("excel_conditional_prune", mutated))
+
+    # AutoFilter mutation.
+    autofilter_nodes = _excel_collect_nodes(root, 'autoFilter')
+    if autofilter_nodes:
+        mutated = _clone_tree(root)
+        mutated_filter = _excel_collect_nodes(mutated, 'autoFilter')[0]
+        mutated_filter.set('ref', 'A1:XFD1048576')
+        filter_column = ET.Element(_excel_ns(mutated_filter.tag, 'filterColumn'), attrib={'colId': '0'})
+        filters = ET.Element(_excel_ns(mutated_filter.tag, 'filters'))
+        filters.append(ET.Element(_excel_ns(mutated_filter.tag, 'filter'), attrib={'val': '999999999999'}))
+        filters.append(ET.Element(_excel_ns(mutated_filter.tag, 'filter'), attrib={'val': '-999999999999'}))
+        filter_column.append(filters)
+        mutated_filter.append(filter_column)
+        mutations.append(("excel_autofilter_expand", mutated))
+
+        mutated = _clone_tree(root)
+        mutated_filter = _excel_collect_nodes(mutated, 'autoFilter')[0]
+        for child in list(mutated_filter):
+            mutated_filter.remove(child)
+        if 'ref' in mutated_filter.attrib:
+            mutated_filter.attrib['ref'] = ''
+        mutations.append(("excel_autofilter_prune", mutated))
+
+    # Hyperlinks mutation.
+    hyperlink_nodes = _excel_collect_nodes(root, 'hyperlinks')
+    if hyperlink_nodes:
+        mutated = _clone_tree(root)
+        mutated_hyper = _excel_collect_nodes(mutated, 'hyperlinks')[0]
+        mutated_hyper.set('xmlns:xr', 'http://schemas.microsoft.com/office/spreadsheetml/2019/extlst')
+        hyperlink = ET.Element(_excel_ns(mutated_hyper.tag, 'hyperlink'), attrib={
+            'ref': 'A1:XFD1048576',
+            'location': _EXCEL_HYPERLINK_LOCATIONS[0],
+            'display': 'HYPERLINK_' + 'Z' * 32,
+            'r:id': _EXCEL_DRAWING_REL_IDS[0],
+        })
+        hyperlink.attrib['tooltip'] = 'MegaHyperLink'
+        hyperlink.attrib['target'] = _EXCEL_HYPERLINK_TARGETS[0]
+        hyperlink.attrib['xr:uid'] = _EXCEL_HYPERLINK_UIDS[0]
+        mutated_hyper.append(hyperlink)
+        mutations.append(("excel_hyperlink_inject", mutated))
+
+        mutated = _clone_tree(root)
+        mutated_hyper = _excel_collect_nodes(mutated, 'hyperlinks')[0]
+        for child in list(mutated_hyper):
+            mutated_hyper.remove(child)
+        mutations.append(("excel_hyperlink_clear", mutated))
+
+    # Comments mutation.
+    comments_nodes = _excel_collect_nodes(root, 'comments')
+    if comments_nodes:
+        mutated = _clone_tree(root)
+        mutated_comments = _excel_collect_nodes(mutated, 'comments')[0]
+        authors = _ensure_child_by_suffix(mutated_comments, 'authors')
+        author = ET.Element(_excel_ns(authors.tag, 'author'))
+        author.text = _EXCEL_AUTHOR_NAMES[0]
+        authors.append(author)
+        comment_list = _ensure_child_by_suffix(mutated_comments, 'commentList')
+        new_comment = ET.Element(_excel_ns(comment_list.tag, 'comment'), attrib={
+            'ref': 'XFD1048576',
+            'authorId': str(max(0, len(list(authors)) - 1)),
+        })
+        text = ET.Element(_excel_ns(comment_list.tag, 'text'))
+        run = ET.Element(_excel_ns(comment_list.tag, 'r'))
+        run_props = ET.Element(_excel_ns(comment_list.tag, 'rPr'))
+        run_props.append(ET.Element(_excel_ns(comment_list.tag, 'b')))  # bold flag
+        run.append(run_props)
+        run_text = ET.Element(_excel_ns(comment_list.tag, 't'))
+        run_text.text = _EXCEL_COMMENT_TEXTS[0]
+        run.append(run_text)
+        text.append(run)
+        new_comment.append(text)
+        comment_list.append(new_comment)
+        mutations.append(("excel_comment_inject", mutated))
+
+        mutated = _clone_tree(root)
+        mutated_comments = _excel_collect_nodes(mutated, 'comments')[0]
+        for child in list(mutated_comments):
+            mutated_comments.remove(child)
+        mutations.append(("excel_comment_clear", mutated))
+
+    # Threaded comments mutation.
+    threaded_nodes = _excel_collect_nodes(root, 'threadedComments')
+    if threaded_nodes:
+        mutated = _clone_tree(root)
+        mutated_threaded = _excel_collect_nodes(mutated, 'threadedComments')[0]
+        tc = ET.Element(_excel_ns(mutated_threaded.tag, 'threadedComment'), attrib={
+            'ref': 'A1',
+            'dT': '2025-01-01T00:00:00Z',
+            'personId': _EXCEL_AUTHOR_NAMES[0],
+            'id': _EXCEL_THREAD_IDS[0],
+        })
+        body = ET.Element(_excel_ns(mutated_threaded.tag, 'text'))
+        body.text = "Threaded -> " + _EXCEL_COMMENT_TEXTS[1]
+        tc.append(body)
+        mutated_threaded.append(tc)
+        mutations.append(("excel_thread_comment_inject", mutated))
+
+        mutated = _clone_tree(root)
+        mutated_threaded = _excel_collect_nodes(mutated, 'threadedComments')[0]
+        for child in list(mutated_threaded):
+            mutated_threaded.remove(child)
+        mutations.append(("excel_thread_comment_clear", mutated))
+
+    # Sparkline mutation.
+    spark_nodes = _excel_collect_nodes(root, 'sparklineGroups')
+    if spark_nodes:
+        mutated = _clone_tree(root)
+        mutated_spark = _excel_collect_nodes(mutated, 'sparklineGroups')[0]
+        spark_group = ET.Element(_excel_ns(mutated_spark.tag, 'sparklineGroup'), attrib={
+            'type': 'column',
+            'displayEmptyCellsAs': 'span',
+            'manualMax': '999999',
+            'manualMin': '-999999',
+            'dateAxis': '1',
+        })
+        sparklines = ET.Element(_excel_ns(mutated_spark.tag, 'sparklines'))
+        for idx in range(4):
+            sparkline = ET.Element(_excel_ns(mutated_spark.tag, 'sparkline'))
+            loc = ET.Element(_excel_ns(mutated_spark.tag, 'f'))
+            loc.text = _EXCEL_SPARKLINE_RANGES[min(idx, len(_EXCEL_SPARKLINE_RANGES) - 1)]
+            cell = ET.Element(_excel_ns(mutated_spark.tag, 'sqref'))
+            cell.text = f"A{idx + 1}"
+            sparkline.append(loc)
+            sparkline.append(cell)
+            sparklines.append(sparkline)
+        spark_group.append(sparklines)
+        mutated_spark.append(spark_group)
+        mutations.append(("excel_sparkline_expand", mutated))
+
+        mutated = _clone_tree(root)
+        mutated_spark = _excel_collect_nodes(mutated, 'sparklineGroups')[0]
+        for child in list(mutated_spark):
+            mutated_spark.remove(child)
+        mutations.append(("excel_sparkline_clear", mutated))
+
+    # Drawing reference mutation.
+    drawing_nodes = _excel_collect_nodes(root, 'drawing')
+    if drawing_nodes:
+        mutated = _clone_tree(root)
+        mutated_drawing = _excel_collect_nodes(mutated, 'drawing')[0]
+        mutated_drawing.attrib['r:id'] = _EXCEL_DRAWING_REL_IDS[0]
+        mutated_drawing.attrib['xmlns:r'] = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+        mutated_drawing.text = (mutated_drawing.text or '') + "\n"
+        mutations.append(("excel_drawing_retarget", mutated))
+
+    legacy_nodes = _excel_collect_nodes(root, 'legacyDrawing')
+    if legacy_nodes:
+        mutated = _clone_tree(root)
+        mutated_legacy = _excel_collect_nodes(mutated, 'legacyDrawing')[0]
+        mutated_legacy.attrib['r:id'] = _EXCEL_DRAWING_REL_IDS[1]
+        mutations.append(("excel_legacy_drawing_retarget", mutated))
 
     return mutations
 
@@ -710,6 +1069,15 @@ def _apply_excel_row_attribute_mutations(root: ET.Element, elements: List[ET.Ele
             mutated_row.attrib['r'] = candidate_ref
             if maybe_emit(mutated_root, "excel_row_ref"):
                 return True
+        current_spans = element.attrib.get('spans')
+        for candidate_span in _EXCEL_ROW_SPAN_MUTATIONS:
+            if candidate_span == current_spans:
+                continue
+            mutated_root = _clone_tree(root)
+            mutated_row = _iter_elements(mutated_root)[idx]
+            mutated_row.attrib['spans'] = candidate_span
+            if maybe_emit(mutated_root, "excel_row_spans"):
+                return True
     return False
 
 
@@ -754,6 +1122,134 @@ def _apply_excel_datetime_mutations(root: ET.Element, elements: List[ET.Element]
             mutated_value.text = new_text
             if maybe_emit(mutated_root, f"excel_datetime_{variant_idx}"):
                 return True
+    return False
+
+
+def _apply_excel_formula_mutations(root: ET.Element, elements: List[ET.Element], maybe_emit) -> bool:
+    for idx, element in enumerate(elements):
+        if _local_name(element.tag) != 'f':
+            continue
+        original_type = element.attrib.get('t')
+        for candidate in _EXCEL_FORMULA_TYPES:
+            if candidate == original_type:
+                continue
+            mutated_root = _clone_tree(root)
+            target_formula = _iter_elements(mutated_root)[idx]
+            if candidate:
+                target_formula.set('t', candidate)
+            else:
+                target_formula.attrib.pop('t', None)
+            if maybe_emit(mutated_root, "excel_formula_type"):
+                return True
+        original_si = element.attrib.get('si')
+        for candidate in _EXCEL_SHARED_INDEX_MUTATIONS:
+            if candidate == original_si:
+                continue
+            mutated_root = _clone_tree(root)
+            target_formula = _iter_elements(mutated_root)[idx]
+            target_formula.set('si', candidate)
+            if maybe_emit(mutated_root, "excel_formula_shared"):
+                return True
+        original_ref = element.attrib.get('ref')
+        for candidate in _EXCEL_FORMULA_REF_MUTATIONS:
+            if candidate == original_ref:
+                continue
+            mutated_root = _clone_tree(root)
+            target_formula = _iter_elements(mutated_root)[idx]
+            target_formula.set('ref', candidate)
+            target_formula.set('ca', '1')
+            if maybe_emit(mutated_root, "excel_formula_ref"):
+                return True
+        original_text = element.text or ''
+        for candidate in _EXCEL_FORMULA_TEXT_MUTATIONS:
+            if candidate == original_text:
+                continue
+            mutated_root = _clone_tree(root)
+            target_formula = _iter_elements(mutated_root)[idx]
+            target_formula.text = candidate
+            if maybe_emit(mutated_root, "excel_formula_text"):
+                return True
+    return False
+
+
+def _apply_excel_column_mutations(root: ET.Element, elements: List[ET.Element], maybe_emit) -> bool:
+    for idx, element in enumerate(elements):
+        if _local_name(element.tag) != 'col':
+            continue
+        original_min = element.attrib.get('min')
+        for candidate in _EXCEL_COLUMN_MIN_MUTATIONS:
+            if candidate == original_min:
+                continue
+            mutated_root = _clone_tree(root)
+            target_col = _iter_elements(mutated_root)[idx]
+            target_col.set('min', candidate)
+            if maybe_emit(mutated_root, "excel_col_min"):
+                return True
+        original_max = element.attrib.get('max')
+        for candidate in _EXCEL_COLUMN_MAX_MUTATIONS:
+            if candidate == original_max:
+                continue
+            mutated_root = _clone_tree(root)
+            target_col = _iter_elements(mutated_root)[idx]
+            target_col.set('max', candidate)
+            if maybe_emit(mutated_root, "excel_col_max"):
+                return True
+        original_width = element.attrib.get('width')
+        for candidate in _EXCEL_COLUMN_WIDTH_MUTATIONS:
+            if candidate == original_width:
+                continue
+            mutated_root = _clone_tree(root)
+            target_col = _iter_elements(mutated_root)[idx]
+            target_col.set('width', candidate)
+            target_col.set('customWidth', '1')
+            if maybe_emit(mutated_root, "excel_col_width"):
+                return True
+        original_style = element.attrib.get('style')
+        for candidate in _EXCEL_COLUMN_STYLE_MUTATIONS:
+            if candidate == original_style:
+                continue
+            mutated_root = _clone_tree(root)
+            target_col = _iter_elements(mutated_root)[idx]
+            target_col.set('style', candidate)
+            if maybe_emit(mutated_root, "excel_col_style"):
+                return True
+        mutated_root = _clone_tree(root)
+        target_col = _iter_elements(mutated_root)[idx]
+        target_col.set('hidden', '1')
+        target_col.set('outlineLevel', '7')
+        if maybe_emit(mutated_root, "excel_col_hidden"):
+            return True
+    return False
+
+
+def _apply_excel_merge_mutations(root: ET.Element, maybe_emit) -> bool:
+    merge_nodes = _excel_collect_nodes(root, 'mergeCells')
+    if not merge_nodes:
+        return False
+    for merge_idx, merge_node in enumerate(merge_nodes[:3]):
+        mutated_root = _clone_tree(root)
+        mutated_merge = _excel_collect_nodes(mutated_root, 'mergeCells')[merge_idx]
+        mutated_merge.set('count', _EXCEL_LARGE_COUNTS[0])
+        mutated_merge.append(ET.Element(_excel_ns(mutated_merge.tag, 'mergeCell'), attrib={'ref': _EXCEL_MERGE_REFS[0]}))
+        if maybe_emit(mutated_root, "excel_merge_expand"):
+            return True
+        for ref in _EXCEL_MERGE_REFS:
+            existing_refs = [child.attrib.get('ref') for child in merge_node]
+            if ref in existing_refs:
+                continue
+            mutated_root = _clone_tree(root)
+            mutated_merge = _excel_collect_nodes(mutated_root, 'mergeCells')[merge_idx]
+            for child in mutated_merge:
+                child.set('ref', ref)
+            if maybe_emit(mutated_root, "excel_merge_ref"):
+                return True
+        mutated_root = _clone_tree(root)
+        mutated_merge = _excel_collect_nodes(mutated_root, 'mergeCells')[merge_idx]
+        for child in list(mutated_merge):
+            mutated_merge.remove(child)
+        mutated_merge.set('count', '0')
+        if maybe_emit(mutated_root, "excel_merge_clear"):
+            return True
     return False
 
 
@@ -815,6 +1311,31 @@ def _random_excel_datetime_mutation(root: ET.Element, elements: List[ET.Element]
     return mutated_root, "excel_havoc_datetime"
 
 
+def _random_excel_formula_mutation(root: ET.Element, elements: List[ET.Element]) -> Optional[Tuple[ET.Element, str]]:
+    candidates = [idx for idx, element in enumerate(elements) if _local_name(element.tag) == 'f']
+    if not candidates:
+        return None
+    target_idx = rand.select(candidates)
+    mutated_root = _clone_tree(root)
+    mutated_formula = _iter_elements(mutated_root)[target_idx]
+    choice = rand.int(3)
+    if choice == 0:
+        formula_type = rand.select(_EXCEL_FORMULA_TYPES)
+        if formula_type:
+            mutated_formula.set('t', formula_type)
+        else:
+            mutated_formula.attrib.pop('t', None)
+        label = "excel_havoc_formula_type"
+    elif choice == 1:
+        mutated_formula.text = rand.select(_EXCEL_FORMULA_TEXT_MUTATIONS)
+        label = "excel_havoc_formula_text"
+    else:
+        mutated_formula.set('si', rand.select(_EXCEL_SHARED_INDEX_MUTATIONS))
+        mutated_formula.set('ref', rand.select(_EXCEL_FORMULA_REF_MUTATIONS))
+        label = "excel_havoc_formula_attr"
+    return mutated_root, label
+
+
 def _random_excel_reference_mutation(root: ET.Element) -> Optional[Tuple[ET.Element, str]]:
     mutations = _excel_reference_mutations(root)
     if not mutations:
@@ -829,6 +1350,52 @@ def _random_excel_structure_mutation(root: ET.Element) -> Optional[Tuple[ET.Elem
         return None
     label, mutated_root = rand.select(mutations)
     return mutated_root, f"{label}_havoc"
+
+
+def _random_excel_column_mutation(root: ET.Element, elements: List[ET.Element]) -> Optional[Tuple[ET.Element, str]]:
+    candidates = [idx for idx, element in enumerate(elements) if _local_name(element.tag) == 'col']
+    if not candidates:
+        return None
+    target_idx = rand.select(candidates)
+    mutated_root = _clone_tree(root)
+    mutated_col = _iter_elements(mutated_root)[target_idx]
+    choice = rand.int(3)
+    if choice == 0:
+        mutated_col.set('min', rand.select(_EXCEL_COLUMN_MIN_MUTATIONS))
+        mutated_col.set('max', rand.select(_EXCEL_COLUMN_MAX_MUTATIONS))
+        label = "excel_havoc_col_range"
+    elif choice == 1:
+        mutated_col.set('width', rand.select(_EXCEL_COLUMN_WIDTH_MUTATIONS))
+        mutated_col.set('customWidth', '1')
+        label = "excel_havoc_col_width"
+    else:
+        mutated_col.set('style', rand.select(_EXCEL_COLUMN_STYLE_MUTATIONS))
+        mutated_col.set('hidden', rand.select(('0', '1')))
+        label = "excel_havoc_col_style"
+    return mutated_root, label
+
+
+def _random_excel_merge_mutation(root: ET.Element) -> Optional[Tuple[ET.Element, str]]:
+    merge_nodes = _excel_collect_nodes(root, 'mergeCells')
+    if not merge_nodes:
+        return None
+    mutated_root = _clone_tree(root)
+    mutated_merge = rand.select(_excel_collect_nodes(mutated_root, 'mergeCells'))
+    choice = rand.int(3)
+    if choice == 0:
+        mutated_merge.set('count', rand.select(_EXCEL_LARGE_COUNTS))
+        mutated_merge.append(ET.Element(_excel_ns(mutated_merge.tag, 'mergeCell'), attrib={'ref': rand.select(_EXCEL_MERGE_REFS)}))
+        label = "excel_havoc_merge_expand"
+    elif choice == 1:
+        for child in mutated_merge:
+            child.set('ref', rand.select(_EXCEL_MERGE_REFS))
+        label = "excel_havoc_merge_ref"
+    else:
+        for child in list(mutated_merge):
+            mutated_merge.remove(child)
+        mutated_merge.set('count', '0')
+        label = "excel_havoc_merge_clear"
+    return mutated_root, label
 
 
 def _random_excel_cell_attribute_mutation(root: ET.Element, elements: List[ET.Element]) -> Optional[Tuple[ET.Element, str]]:
@@ -876,8 +1443,13 @@ def _random_excel_row_attribute_mutation(root: ET.Element, elements: List[ET.Ele
     target_idx = rand.select(candidates)
     mutated_root = _clone_tree(root)
     mutated_row = _iter_elements(mutated_root)[target_idx]
-    mutated_row.attrib['r'] = rand.select(_EXCEL_ROW_REFERENCE_MUTATIONS)
-    return mutated_root, "excel_havoc_row_ref"
+    if rand.int(2) == 0:
+        mutated_row.attrib['r'] = rand.select(_EXCEL_ROW_REFERENCE_MUTATIONS)
+        label = "excel_havoc_row_ref"
+    else:
+        mutated_row.attrib['spans'] = rand.select(_EXCEL_ROW_SPAN_MUTATIONS)
+        label = "excel_havoc_row_spans"
+    return mutated_root, label
 
 
 _LOCAL_DICT_CACHE: Set[bytes] = set()
@@ -1187,9 +1759,15 @@ def mutate_seq_xml_structured(payload: bytes, func, xml_info: XMLSeedInfo, max_o
 
     if _apply_excel_cell_attribute_mutations(root, elements, maybe_emit):
         return
+    if _apply_excel_cell_value_mutations(root, elements, maybe_emit):
+        return
+    if _apply_excel_formula_mutations(root, elements, maybe_emit):
+        return
     if _apply_excel_row_attribute_mutations(root, elements, maybe_emit):
         return
-    if _apply_excel_cell_value_mutations(root, elements, maybe_emit):
+    if _apply_excel_column_mutations(root, elements, maybe_emit):
+        return
+    if _apply_excel_merge_mutations(root, maybe_emit):
         return
     if _apply_excel_datetime_mutations(root, elements, maybe_emit):
         return
@@ -1272,7 +1850,7 @@ def mutate_seq_xml_havoc(payload: bytes, func, xml_info: XMLSeedInfo, max_iterat
             _mutate_xml_textual(payload, func, xml_info, 1, label_prefix="xml_havoc_txt")
             return
 
-        choice = rand.int(11)
+        choice = rand.int(14)
         mutated_root: Optional[ET.Element] = None
         label: Optional[str] = None
 
@@ -1313,22 +1891,37 @@ def mutate_seq_xml_havoc(payload: bytes, func, xml_info: XMLSeedInfo, max_iterat
                 continue
             mutated_root, label = result
         elif choice == 6:
-            result = _random_excel_row_attribute_mutation(root, elements)
-            if result is None:
-                continue
-            mutated_root, label = result
-        elif choice == 7:
             result = _random_excel_cell_mutation(root, elements)
             if result is None:
                 continue
             mutated_root, label = result
+        elif choice == 7:
+            result = _random_excel_formula_mutation(root, elements)
+            if result is None:
+                continue
+            mutated_root, label = result
         elif choice == 8:
-            result = _random_excel_datetime_mutation(root, elements)
+            result = _random_excel_row_attribute_mutation(root, elements)
             if result is None:
                 continue
             mutated_root, label = result
         elif choice == 9:
+            result = _random_excel_datetime_mutation(root, elements)
+            if result is None:
+                continue
+            mutated_root, label = result
+        elif choice == 10:
             result = _random_excel_reference_mutation(root)
+            if result is None:
+                continue
+            mutated_root, label = result
+        elif choice == 11:
+            result = _random_excel_column_mutation(root, elements)
+            if result is None:
+                continue
+            mutated_root, label = result
+        elif choice == 12:
+            result = _random_excel_merge_mutation(root)
             if result is None:
                 continue
             mutated_root, label = result
