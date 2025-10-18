@@ -23,6 +23,43 @@ _MAX_TOKEN_COUNT = sys.maxsize
 _MAX_TEXT_LENGTH = 256
 _DEFAULT_TEXT_TOKENS = ["", "0", "1", "true", "false", "null", "NaN", "INF"]
 _DEFAULT_TAG_TOKENS = ["data", "item", "node", "value"]
+_NUMERIC_INTERESTING_VALUES = [
+    -2147483648,
+    -2147483647,
+    -65536,
+    -65535,
+    -1024,
+    -512,
+    -256,
+    -128,
+    -64,
+    -32,
+    -16,
+    -8,
+    -2,
+    -1,
+    0,
+    1,
+    2,
+    4,
+    8,
+    16,
+    31,
+    32,
+    63,
+    64,
+    127,
+    128,
+    255,
+    256,
+    512,
+    1024,
+    4096,
+    65535,
+    65536,
+    2147483646,
+    2147483647,
+]
 
 _SCHEMA_PATH = Path(__file__).with_name('xml_schema_tokens.json')
 _GLOBAL_SCHEMA = {
@@ -2148,6 +2185,139 @@ def _mutate_xml_textual(payload: bytes, func, xml_info: Optional[XMLSeedInfo], m
             if operations >= max_operations:
                 return
 
+
+def _looks_like_integer(value: str) -> bool:
+    if not value:
+        return False
+    stripped = value.strip()
+    if not stripped:
+        return False
+    if stripped[0] in '+-':
+        if len(stripped) == 1:
+            return False
+        stripped = stripped[1:]
+    return stripped.isdigit()
+
+
+def _format_integer_like(original: str, new_value: int) -> str:
+    stripped = original.strip()
+    prefix = ''
+    digits = stripped
+    if stripped and stripped[0] in '+-':
+        prefix = stripped[0]
+        digits = stripped[1:]
+    abs_value = abs(new_value)
+    has_zero_padding = len(digits) > 1 and digits.startswith('0')
+    formatted_digits = str(abs_value)
+    if has_zero_padding:
+        formatted_digits = formatted_digits.zfill(len(digits))
+    if prefix == '+':
+        sign = '+' if new_value >= 0 else '-'
+    elif prefix == '-':
+        sign = '-' if new_value < 0 else ('+' if new_value > 0 and original.strip().startswith('+') else '')
+    else:
+        sign = '-' if new_value < 0 else ''
+    if sign == '+' and new_value < 0:
+        sign = '-'
+    return sign + formatted_digits
+
+
+def _integer_mutation_candidates(original: str) -> List[str]:
+    stripped = original.strip()
+    if not stripped or not _looks_like_integer(stripped):
+        return []
+    try:
+        base_value = int(stripped)
+    except ValueError:
+        return []
+
+    candidate_values: Set[int] = set()
+    for delta in (-2, -1, 1, 2):
+        candidate_values.add(base_value + delta)
+
+    candidate_values.update(_NUMERIC_INTERESTING_VALUES)
+
+    formatted: List[str] = []
+    seen: Set[str] = set()
+    for val in sorted(candidate_values, key=lambda v: (abs(v - base_value), v)):
+        formatted_val = _format_integer_like(stripped, val)
+        if formatted_val != stripped and formatted_val not in seen:
+            seen.add(formatted_val)
+            formatted.append(formatted_val)
+    return formatted
+
+
+def _mutate_numeric_textual(payload: bytes, func, max_operations: int, label_prefix: str = "xml_num_txt"):
+    if max_operations <= 0:
+        return
+    try:
+        text = payload.decode('utf-8')
+    except UnicodeDecodeError:
+        text = payload.decode('latin1', 'ignore')
+
+    pattern = re.compile(r'([-+]?\d+)')
+    operations = 0
+
+    def emit(mutated_text: str, label: str):
+        nonlocal operations
+        func(mutated_text.encode('utf-8', 'ignore'), label=label)
+        operations += 1
+
+    for match in pattern.finditer(text):
+        original = match.group(1)
+        candidates = _integer_mutation_candidates(original)
+        if not candidates:
+            continue
+        for candidate in candidates:
+            mutated = text[:match.start(1)] + candidate + text[match.end(1):]
+            emit(mutated, f"{label_prefix}_text")
+            if operations >= max_operations:
+                return
+
+
+def mutate_seq_xml_numeric(payload: bytes, func, xml_info: Optional[XMLSeedInfo], max_operations: int = 128):
+    """Deterministic mutations targeting numeric XML text nodes and attributes."""
+
+    if max_operations <= 0:
+        return
+
+    root = _try_parse_xml(payload)
+    if root is None:
+        _mutate_numeric_textual(payload, func, max_operations)
+        return
+
+    elements = _iter_elements(root)
+    operations = 0
+
+    def maybe_emit(mutated_root: ET.Element, label: str) -> bool:
+        nonlocal operations
+        if _emit_xml_mutation(payload, mutated_root, xml_info, func, label):
+            operations += 1
+        return operations >= max_operations
+
+    for idx, element in enumerate(elements):
+        text = element.text
+        if text and text == text.strip() and _looks_like_integer(text):
+            for candidate in _integer_mutation_candidates(text):
+                mutated_root = _clone_tree(root)
+                mutated_elements = _iter_elements(mutated_root)
+                mutated_target = mutated_elements[idx]
+                mutated_target.text = candidate
+                if maybe_emit(mutated_root, "xml_numeric_text"):
+                    return
+
+        for attr_key, attr_value in list(element.attrib.items()):
+            if not attr_value or attr_value.strip() != attr_value:
+                continue
+            if not _looks_like_integer(attr_value):
+                continue
+            for candidate in _integer_mutation_candidates(attr_value):
+                mutated_root = _clone_tree(root)
+                mutated_elements = _iter_elements(mutated_root)
+                mutated_target = mutated_elements[idx]
+                mutated_target.set(attr_key, candidate)
+                if maybe_emit(mutated_root, "xml_numeric_attr"):
+                    return
 
 def _emit_xml_mutation(original_payload: bytes, mutated_root: ET.Element, xml_info: Optional[XMLSeedInfo], func, label: str) -> bool:
     mutated_bytes = _element_to_bytes(mutated_root)

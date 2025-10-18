@@ -539,10 +539,16 @@ class FuzzingStateLogic:
 
         # Arithmetic mutations..
         if det_info["stage"] == "arith":
-            effector_map = det_info.get("eff_map", None)
-            arithmetic.mutate_seq_8_bit_arithmetic(payload_array,  self.execute, skip_null=skip_zero, effector_map=effector_map, arith_max=arith_max)
-            arithmetic.mutate_seq_16_bit_arithmetic(payload_array, self.execute, skip_null=skip_zero, effector_map=effector_map, arith_max=arith_max)
-            arithmetic.mutate_seq_32_bit_arithmetic(payload_array, self.execute, skip_null=skip_zero, effector_map=effector_map, arith_max=arith_max)
+            if self.xml_info:
+                self.stage_update_label("xml_numeric")
+                xml_start = time.time()
+                xml_mutations.mutate_seq_xml_numeric(bytes(payload_array), self.execute, self.xml_info)
+                self.xml_time += time.time() - xml_start
+            else:
+                effector_map = det_info.get("eff_map", None)
+                arithmetic.mutate_seq_8_bit_arithmetic(payload_array,  self.execute, skip_null=skip_zero, effector_map=effector_map, arith_max=arith_max)
+                arithmetic.mutate_seq_16_bit_arithmetic(payload_array, self.execute, skip_null=skip_zero, effector_map=effector_map, arith_max=arith_max)
+                arithmetic.mutate_seq_32_bit_arithmetic(payload_array, self.execute, skip_null=skip_zero, effector_map=effector_map, arith_max=arith_max)
 
             det_info["stage"] = "intr"
             if self.stage_timeout_reached():
@@ -550,10 +556,11 @@ class FuzzingStateLogic:
 
         # Interesting value mutations..
         if det_info["stage"] == "intr":
-            effector_map = det_info.get("eff_map", None)
-            interesting_values.mutate_seq_8_bit_interesting(payload_array, self.execute, skip_null=skip_zero, effector_map=effector_map)
-            interesting_values.mutate_seq_16_bit_interesting(payload_array, self.execute, skip_null=skip_zero, effector_map=effector_map, arith_max=arith_max)
-            interesting_values.mutate_seq_32_bit_interesting(payload_array, self.execute, skip_null=skip_zero, effector_map=effector_map, arith_max=arith_max)
+            if not self.xml_info:
+                effector_map = det_info.get("eff_map", None)
+                interesting_values.mutate_seq_8_bit_interesting(payload_array, self.execute, skip_null=skip_zero, effector_map=effector_map)
+                interesting_values.mutate_seq_16_bit_interesting(payload_array, self.execute, skip_null=skip_zero, effector_map=effector_map, arith_max=arith_max)
+                interesting_values.mutate_seq_32_bit_interesting(payload_array, self.execute, skip_null=skip_zero, effector_map=effector_map, arith_max=arith_max)
 
             det_info["stage"] = "done"
 
