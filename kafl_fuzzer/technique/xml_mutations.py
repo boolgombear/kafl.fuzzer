@@ -93,7 +93,6 @@ def _save_schema_tokens():
     data = {key: sorted(list(values))[:_MAX_TOKEN_COUNT] for key, values in _GLOBAL_SCHEMA.items()}
     try:
         _SCHEMA_PATH.write_text(json.dumps(data, indent=2), encoding='utf-8')
-        _LOGGER.info('Persisted XML schema tokens -> %s', ', '.join(f"{k}:{len(v)}" for k, v in data.items()))
     except OSError as exc:
         _LOGGER.warning('Failed to persist XML schema tokens: %s', exc)
 
@@ -116,13 +115,6 @@ def _update_schema_store(updates: Dict[str, Iterable[str]]):
                 added_tokens[key].append(truncated)
                 dirty = True
     if dirty:
-        summary = []
-        for key, vals in added_tokens.items():
-            if vals:
-                sample = ', '.join(sorted(vals)[:5])
-                summary.append(f"{key}: {sample}")
-        if summary:
-            _LOGGER.info("Updated XML schema tokens -> %s", '; '.join(summary))
         _save_schema_tokens()
 
 
@@ -2122,14 +2114,6 @@ def _register_discovered_tokens(base_info: Optional[XMLSeedInfo], mutated_info: 
         for token in bucket:
             added |= _maybe_add_dict_token(token)
     _update_schema_store(updates)
-    if added:
-        summaries = []
-        for key, values in updates.items():
-            if values:
-                sample = ', '.join(sorted(list(values))[:5])
-                summaries.append(f"{key}: {sample}")
-        if summaries:
-            _LOGGER.info("Discovered XML tokens -> %s", '; '.join(summaries))
     return added
 
 
